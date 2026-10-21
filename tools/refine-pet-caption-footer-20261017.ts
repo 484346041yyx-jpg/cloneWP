@@ -1,0 +1,20 @@
+import {readFile,writeFile,mkdir} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {native44ModuleClass} from '../src/native44/adapters.js';
+import {buildNative44PageCSS} from '../src/native44/css-handoff.js';
+const base='D:/cloneWP/runs/2026-10-17T02-00-02-486Z-n44-1f0d432c/amendments/20261017-products-and-css',dir=base+'/refinement-03';await mkdir(dir,{recursive:true});const json=async(f:string)=>JSON.parse(await readFile(f,'utf8'));
+const manifest=await json(base+'/compare-manifest.json'),before=await json(base+'/refinement-02/after.json'),rules:any[]=[];
+const c=(key:string)=>'.'+native44ModuleClass(key),sha=(s:string|Buffer)=>createHash('sha256').update(s).digest('hex');const sort=(v:any):any=>Array.isArray(v)?v.map(sort):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,sort(v)])):v;const canonical=(v:any)=>JSON.stringify(sort(v));
+const add=(moduleKey:string,selector:string,declarations:Record<string,string>,reason:string)=>rules.push({moduleKey,selector,declarations:Object.fromEntries(Object.entries(declarations).map(([k,v])=>[k,v+' !important'])),media:'(min-width: 1025px)',reason,evidence:['Immutable source text paint and frame facts','Actual source/draft DOM inspected in connected Chrome']});
+for(const key of ['brands','dog-deals','cat-deals','specialty-deals']){
+ add(key,'.elementor-heading-title',{'letter-spacing':'0.8px'},'Actual source marketing headings have 0.8px tracking.');
+ for(const selector of ['.elementor-image-box-title','.elementor-image-box-description'])add(key,selector,{'max-width':'202px','margin-left':'auto','margin-right':'auto','letter-spacing':'0.8px'},'Source marketing cards have a 202px text allocation and 0.8px tracking; preserve complete text and actual wraps.');
+}
+add('cat-deals','> .e-con-inner',{'padding-bottom':'3px'},'The longest original hidden cat caption has three description lines; source retains it with only a three-pixel lower inset, rather than the dog row 24px inset.');
+add('footer','',{'letter-spacing':'0.8px'},'Actual footer copy has 0.8px tracking, including the measured 170px copyright text.');
+add('footer',c('footer-social-row'),{'padding-left':'20px','padding-bottom':'36px'},'Match actual source logo-group horizontal placement and the six-pixel gap before the legal strip.');
+add('footer',c('footer-legal-row'),{'padding-bottom':'27.6px'},'Keep the complete legal line and match the measured source footer lower whitespace.');
+const css=before.settings.custom_css+'\n'+buildNative44PageCSS({replicationProfile:manifest.replicationProfile,pageId:15621,modules:manifest.modules,rules,canvasCss:''}).css;
+const settings={...before.settings,custom_css:css},elements=before.elements,expected={...before,settings,hash:sha(canonical({elements,settings}))};
+await writeFile(dir+'/request.json',JSON.stringify({kind:'explicit-user-caption-and-footer-refinement',pageId:15621,authorization:'Current user requests directly applied CSS and matching component layout.',scope:'Page CSS only; preserve every product query, media and body node.',reason:'Final read-only review identified source caption tracking/allocation and footer whitespace differences.'},null,2));
+await writeFile(dir+'/before.json',JSON.stringify(before,null,2));await writeFile(dir+'/expected.json',JSON.stringify(expected,null,2));await writeFile(dir+'/page-custom.css',css);await writeFile(dir+'/css-rules.json',JSON.stringify(rules,null,2));await writeFile(dir+'/intent.json',JSON.stringify({version:1,kind:'explicit-user-owned-draft-amendment',pageId:15621,runId:manifest.runId,beforeHash:before.hash,expectedHash:expected.hash,requestSha256:sha(await readFile(dir+'/request.json')),replacementIds:[],payloadSha256:sha(canonical({elements,settings})),cssSha256:sha(css),allowedPageSettingKeys:['custom_css'],status:'prepared',createdAt:new Date().toISOString()},null,2));console.log(JSON.stringify({status:'prepared-css-only',expectedHash:expected.hash,remoteWrites:0}));

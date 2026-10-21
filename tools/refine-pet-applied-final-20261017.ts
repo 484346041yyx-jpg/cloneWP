@@ -1,0 +1,30 @@
+import {readFile,writeFile,mkdir} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {native44Id,native44ModuleClass} from '../src/native44/adapters.js';
+import {buildNative44PageCSS,canonicalNative44CSS} from '../src/native44/css-handoff.js';
+const run='D:/cloneWP/runs/2026-10-17T02-00-02-486Z-n44-1f0d432c',base=run+'/amendments/20261017-products-and-css',dir=base+'/refinement-02';await mkdir(dir,{recursive:true});
+const json=async(f:string)=>JSON.parse(await readFile(f,'utf8'));
+const manifest=await json(base+'/compare-manifest.json'),before=await json(base+'/refinement-01/after.json');
+const c=(key:string)=>'.'+native44ModuleClass(key),rules:any[]=[];
+const sha=(s:string|Buffer)=>createHash('sha256').update(s).digest('hex');const sort=(v:any):any=>Array.isArray(v)?v.map(sort):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,sort(v)])):v;const canonical=(v:any)=>JSON.stringify(sort(v));
+const add=(moduleKey:string,selector:string,declarations:Record<string,string>,reason:string)=>rules.push({moduleKey,selector,declarations:Object.fromEntries(Object.entries(declarations).map(([k,v])=>[k,v+' !important'])),media:'(min-width: 1025px)',reason,evidence:['Actual current source/draft DOM and screenshots; font browser export','Immutable desktop source facts']});
+add('header','.cwp-n44-ba02f12097a4',{'height':'44px','min-height':'44px'},'Match the 120px source header; keep the actual book-service child within its 44px secondary row.');
+add('bogo','',{'margin-top':'30px'},'Source BOGO begins 30px after the pet category allocation.');
+add('benefits','',{'margin-top':'39px'},'Source benefit panel begins 39px after the fall region.');
+add('footer',c('footer-columns'),{'display':'grid','grid-template-columns':'minmax(0, calc((100% + 56px) / 3)) repeat(4, minmax(0, 1fr))','gap':'0','padding':'40px 8px 70px 48px'},'Source reserves one-third of the 1440px owner for signup and four 226px navigation columns.');
+add('footer',c('footer-signup'),{'width':'90%'},'Source signup copy is 432px within its 480px allocated grid track.');
+for(const key of [14,36,58,80]){add('footer',c('footer-column-'+key),{'width':'100%'},'Fill the actual source-sized navigation grid track.');add('footer',c('footer-list-'+key),{'margin-top':'9px'},'Source navigation list starts nine pixels after its 45px heading allocation.');}
+add('footer',c('footer-image-6')+' img',{'width':'298px','height':'152px','object-fit':'fill'},'Source signup artwork has an explicitly observed 298x152px display box.');
+add('footer',c('footer-text-9'),{'margin-top':'9px','line-height':'21px'},'Source signup explanatory line follows its heading with a nine-pixel gap.');
+add('footer',c('footer-text-9')+' p',{'margin':'0','line-height':'21px'},'Match actual source 14px/21px paragraph metrics.');
+add('footer',c('footer-text-11'),{'margin-top':'12px'},'Source signup CTA has a twelve-pixel gap after the explanatory line.');
+add('footer',c('footer-text-11')+' .elementor-button-wrapper',{'text-align':'left'},'Source signup CTA aligns with the left edge of its copy.');
+add('footer',c('footer-image-104')+' img',{'width':'188px','height':'52px','object-fit':'fill'},'Match actual source footer logo geometry instead of the intrinsic rounded SVG pixel size.');
+const patch=buildNative44PageCSS({replicationProfile:manifest.replicationProfile,pageId:15621,modules:manifest.modules,rules,canvasCss:''});
+const css=before.settings.custom_css+'\n'+patch.css;canonicalNative44CSS(css);
+const elements=structuredClone(before.elements);const find=(nodes:any[],id:string):any=>{for(const n of nodes){if(n.id===id)return n;const x=find(n.elements??[],id);if(x)return x;}};
+const replacementIds:string[]=[];
+for(const key of ['brands-carousel','dog-deals-carousel','cat-deals-carousel']){const id=native44Id(manifest.taskId,key),widget=find(elements,id);if(widget?.widgetType!=='nested-carousel')throw Error('Actual native carousel owner missing');widget.settings.image_spacing_custom={unit:'px',size:0,sizes:[]};replacementIds.push(id);}
+const settings={...before.settings,custom_css:css},expected={...before,elements,settings,hash:sha(canonical({elements,settings}))};
+await writeFile(dir+'/request.json',JSON.stringify({kind:'explicit-user-final-visual-refinement',pageId:15621,authorization:'Current user requests matching native components, direct page CSS and visual review.',changes:['Source header/category/benefit offsets','Registered native carousel spacing control, preserving complete text','Actual source footer grid and artwork dimensions'],scope:'This owned unpublished draft only'},null,2));
+await writeFile(dir+'/before.json',JSON.stringify(before,null,2));await writeFile(dir+'/expected.json',JSON.stringify(expected,null,2));await writeFile(dir+'/page-custom.css',css);await writeFile(dir+'/css-rules.json',JSON.stringify(rules,null,2));await writeFile(dir+'/intent.json',JSON.stringify({version:1,kind:'explicit-user-owned-draft-amendment',pageId:15621,runId:manifest.runId,beforeHash:before.hash,expectedHash:expected.hash,requestSha256:sha(await readFile(dir+'/request.json')),replacementIds,payloadSha256:sha(canonical({elements,settings})),cssSha256:sha(css),allowedPageSettingKeys:['custom_css'],status:'prepared',createdAt:new Date().toISOString()},null,2));console.log(JSON.stringify({status:'prepared',expectedHash:expected.hash,cssBytes:css.length,remoteWrites:0}));

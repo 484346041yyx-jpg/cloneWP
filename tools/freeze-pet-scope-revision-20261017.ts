@@ -1,0 +1,33 @@
+import {readFile,writeFile,mkdir,copyFile,cp} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {prepareLocalTask} from '../src/native44/local-task.js';
+import {native44SelectionHash,validateNative44Selection} from '../src/native44/selection.js';
+import {loadNative44Knowledge} from '../src/native44/knowledge.js';
+import {usedNative44WidgetTypes,preflightNative44} from '../src/native44/compiler.js';
+import {toNative44CompilerKnowledge} from '../src/native44/knowledge.js';
+const oldDir='D:/cloneWP/references/reference-v2-2026-10-17T01-38-08-872Z-www-petsupermarket-com-0cd5b3b3';
+const dir='D:/cloneWP/references/reference-v2-2026-10-17T01-53-33-144Z-www-petsupermarket-com-0f207465';
+const json=async(p:string)=>JSON.parse(await readFile(p,'utf8'));
+const hash=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex');
+const ref=async(p:string)=>({path:p,sha256:hash(await readFile(p))});
+const save=async(p:string,v:unknown)=>writeFile(p,JSON.stringify(v,null,2)+'\n');
+await cp(oldDir+'/assets',dir+'/assets',{recursive:true});await cp(oldDir+'/target-read-only',dir+'/target-read-only',{recursive:true});
+const job=await json(dir+'/job.json'),facts=await json(job.sourceFactsPath),sourceRef=await ref(job.sourceFactsPath);
+const replace=(v:any):any=>typeof v==='string'?v.replaceAll(oldDir,dir).replaceAll(oldDir.replaceAll('/','\\'),dir.replaceAll('/','\\')):Array.isArray(v)?v.map(replace):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,v])=>[k,replace(v)])):v;
+const scope=replace(await json(oldDir+'/task-scope.json'));scope.taskId=job.taskId;await save(dir+'/task-scope.json',scope);const scopeRef=await ref(dir+'/task-scope.json');
+const manifest=replace(await json(oldDir+'/asset-manifest.json'));await save(dir+'/asset-manifest.json',manifest);
+const program=replace(await json(oldDir+'/program.json')),plan=replace(await json(oldDir+'/component-plan.json'));
+program.taskId=job.taskId;program.sourceFacts=sourceRef;program.assetsManifest=await ref(dir+'/asset-manifest.json');plan.sourceFacts=sourceRef;plan.selectionReview.sourceFacts=sourceRef;
+for(const d of plan.selectionDecisions)for(const e of d.candidates.flatMap((c:any)=>c.evidence))if(e.path===job.sourceFactsPath||e.path.replaceAll('\\','/')===job.sourceFactsPath.replaceAll('\\','/'))Object.assign(e,sourceRef);
+for(const d of plan.catalogDeferrals)d.scope=scopeRef;
+// Inline widths apply to actual row children, preserving editable native controls.
+const walk=(ns:any[])=>ns.flatMap(n=>[n,...walk(n.children??n.slides??[])]),nodes=walk(program.blocks),byKey=new Map(nodes.map(n=>[n.key,n]));
+for(const n of nodes){if(n.kind==='composite')continue;const owner=nodes.find(parent=>(parent.children??parent.slides??[]).some((child:any)=>child.key===n.key));if(owner?.settings?.flex_direction==='row'&&n.widgetType!=='wd_image_or_svg'&&n.kind!=='native-carousel')n.widgetSettings._element_width='auto';
+ if(n.widgetType==='image-box'){const unit=plan.sourceUnits.find((u:any)=>u.snapshotId===plan.desktopSnapshotId&&u.id.endsWith('selected-'+n.key));const text=unit?.sourceFactIds.map((id:string)=>facts.facts[id]).filter((f:any)=>f.kind==='text')[0];if(text){const s=text.value.style;n.widgetSettings.title_typography_font_size={unit:'px',size:parseFloat(s['font-size']),sizes:[]};n.widgetSettings.title_typography_line_height={unit:'px',size:parseFloat(s['line-height'])||19,sizes:[]};n.widgetSettings.title_typography_font_weight=/^[1-9]00$/.test(s['font-weight'])?s['font-weight']:parseFloat(s['font-weight'])>=600?'700':'400';}if(n.key.startsWith('categories-card'))n.widgetSettings.image_size={unit:'%',size:58,sizes:[]};}}
+byKey.get('categories').settings.padding={unit:'px',top:20,right:96,bottom:40,left:96,isLinked:false};
+plan.selectionReview.reviewedAt=new Date().toISOString();plan.selectionReview.decisionsSha256=native44SelectionHash({sourceUnits:plan.sourceUnits,selectionDecisions:plan.selectionDecisions});
+await save(dir+'/component-plan.json',plan);program.componentPlan=await ref(dir+'/component-plan.json');await save(dir+'/program.json',program);
+await save(dir+'/scope-revision.json',{version:1,reason:'Explicit user product deferral and corrected native media condition checking. Previous source/planning revisions and release locks remain unchanged.',previousTask:oldDir,taskId:job.taskId,remoteWrites:0});
+await save(dir+'/job.json',{...job,status:'awaiting-complete-draft',programPath:dir+'/program.json'});
+const input=await prepareLocalTask(dir+'/program.json','D:/cloneWP');const cap=await json(dir+'/target-read-only/capabilities.json');validateNative44Selection(program,plan,facts,{knowledge:input.knowledge,schemas:cap.legacySchemas});preflightNative44(program,{schemas:cap.legacySchemas,knowledge:toNative44CompilerKnowledge(input.knowledge,cap.legacySchemas),targetOrigin:'https://primevapeoutlet.com'});
+console.log(JSON.stringify({status:'final-scoped-local-and-target-validated',taskId:job.taskId,nodes:nodes.length,queries:0,assets:manifest.assets.length}));

@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { chromium } from 'playwright';
+import { probeDeferredMediaV2, verifyInteractionV2 } from '../src/replica-v2/verify.js';
+import { nativeAutoplayV2, resolveNativeCarouselV2 } from '../src/replica-v2/native-carousel.js';
+
+const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=', 'base64');
+const fixture = (eager = false) => `<!doctype html><html><style>body{margin:0}.space{height:1200px}.swiper{width:300px;height:120px;overflow:hidden}.swiper-wrapper{display:flex;width:15000px;transition:transform .08s linear}.swiper-slide{flex:0 0 300px;height:120px}img{width:150px;height:100px}button{height:30px}</style><div class="space"></div><section id="owner" data-id="aaaaaaa"><div data-id="bbbbbbb" data-widget_type="nested-carousel.default" data-settings='{"autoplay":"no","infinite":"no"}'><div class="swiper"><div class="swiper-wrapper">${Array.from({length:50},(_,index)=>`<div class="swiper-slide${index===0?' swiper-slide-active':''}" data-swiper-slide-index="${index}">${index===40?`<img id="deferred" src="/image.png" loading="${eager?'eager':'lazy'}">`:`Slide ${index}`}</div>`).join('')}</div></div><button class="elementor-swiper-button-prev">Previous</button><button class="elementor-swiper-button-next">Next</button><div class="swiper-pagination"><span class="swiper-pagination-current">1</span>/<span class="swiper-pagination-total">50</span></div></div></section><script>
+const area=document.querySelector('.swiper'),track=document.querySelector('.swiper-wrapper'),slides=[...track.children];
+const runtime=area.swiper={initialized:true,destroyed:false,animating:false,activeIndex:0,realIndex:0,snapIndex:0,params:{slidesPerView:1,slidesPerGroup:1,loop:false,autoplay:{enabled:false,delay:3000}},autoplay:{running:false},slideTo(index){if(index===this.activeIndex)return;this.activeIndex=this.realIndex=this.snapIndex=index;this.animating=true;slides.forEach((slide,ordinal)=>slide.classList.toggle('swiper-slide-active',ordinal===index));track.style.transform='translateX('+(-index*300)+'px)';document.querySelector('.swiper-pagination-current').textContent=String(index+1)}};
+track.addEventListener('transitionend',()=>runtime.animating=false);
+document.querySelector('.elementor-swiper-button-next').onclick=()=>runtime.slideTo((runtime.activeIndex+1)%50);document.querySelector('.elementor-swiper-button-prev').onclick=()=>runtime.slideTo((runtime.activeIndex+49)%50);
+</script></html>`;
+
+test('deferred native slide uses the actual public engine, decodes visible pixels and restores native/window positions even for bad bytes', async () => {
+  let bad=false,requests=0,eager=false;const server=createServer((request,response)=>{if(request.url==='/image.png'){requests++;response.writeHead(200,{'Content-Type':'image/png'});response.end(bad?Buffer.from('bad pixels'):pixel);return;}response.writeHead(200,{'Content-Type':'text/html'});response.end(fixture(eager));});
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();if(!address||typeof address==='string')throw Error('Fixture server unavailable');const origin=`http://127.0.0.1:${address.port}`;
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage({viewport:{width:390,height:844}});await page.goto(origin,{waitUntil:'domcontentloaded'});await page.waitForTimeout(150);assert.equal(requests,0);
+    const proof=await probeDeferredMediaV2(page,'#deferred',origin+'/image.png',true) as any;
+    assert.equal(proof.nativeCarousel.targetIndex,40);assert.deepEqual(proof.nativeCarousel.revealed.visibleSourceIds,['index:40']);assert.deepEqual(proof.nativeCarousel.restored.activeSourceIds,['index:0']);assert.equal(proof.after.decoded,true);assert.equal(proof.after.drawable,true);assert.ok(proof.after.paintedWidth>1);assert.equal(proof.restored.exact,true);assert.equal(await page.evaluate(()=>scrollY),0);assert.equal(requests,1);
+    bad=true;await page.goto(origin+'/?bad',{waitUntil:'domcontentloaded'});let failed:any;await assert.rejects(async()=>{try{await probeDeferredMediaV2(page,'#deferred',origin+'/image.png',true);}catch(error){failed=error;throw error;}},/decodable pixels/);assert.deepEqual(failed.evidence.nativeCarousel.restored.activeSourceIds,['index:0']);assert.equal(failed.evidence.restored.exact,true);
+    bad=false;eager=true;await page.goto(origin+'/?pending-complete',{waitUntil:'networkidle'});await page.locator('#deferred').evaluate(image=>Object.defineProperty(image,'complete',{value:false,configurable:true}));const pending=await probeDeferredMediaV2(page,'#deferred',origin+'/image.png',true) as any;assert.equal(pending.before.complete,false);assert.ok(pending.before.naturalWidth>0);assert.equal(pending.after.complete,false);assert.equal(pending.after.decoded,true);assert.equal(pending.after.drawable,true);assert.equal(pending.restored.exact,true);
+    await page.addScriptTag({content:`const native=document.querySelector('.swiper').swiper,realSlides=[...document.querySelector('.swiper-wrapper').children];const first=realSlides[0].cloneNode(true),last=realSlides[49].cloneNode(true);first.className=last.className='swiper-slide swiper-slide-duplicate';track.prepend(last);track.append(first);track.style.transitionDuration='0s';track.style.transform='translateX(-300px)';native.params.loop=true;native.activeIndex=native.snapIndex=1;native.realIndex=0;native.slideTo=undefined;native.slideToLoop=function(index){if(index===this.realIndex)return;track.style.transitionDuration='.08s';this.activeIndex=this.snapIndex=index+1;this.realIndex=index;this.animating=true;realSlides.forEach((slide,ordinal)=>slide.classList.toggle('swiper-slide-active',ordinal===index));track.style.transform='translateX('+(-(index+1)*300)+'px)';document.querySelector('.swiper-pagination-current').textContent=String(index+1)};`});await page.waitForTimeout(100);
+    const loop=await probeDeferredMediaV2(page,'#deferred',origin+'/image.png',true) as any;assert.deepEqual(loop.nativeCarousel.revealed.activeSourceIds,['index:40']);assert.deepEqual(loop.nativeCarousel.restored.activeSourceIds,['index:0']);assert.equal(await page.locator('.swiper').evaluate(root=>(root as any).swiper.activeIndex),1);assert.equal(loop.restored.exact,true);
+  } finally {await browser.close();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+
+test('manual carousel resolves its unique actual native owner and rejects enabled, running or unknown autoplay', async () => {
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage({viewport:{width:900,height:1000}});await page.setContent(fixture());const owner=await resolveNativeCarouselV2(page.locator('#owner'));assert.equal(await owner.getAttribute('data-id'),'bbbbbbb');
+    const result=await verifyInteractionV2(page,'#owner','carousel',{manual:true,pagination:'fraction'}) as any;assert.equal(result.autoplay.ownerId,'bbbbbbb');assert.equal(result.autoplay.declared,false);assert.equal(result.autoplay.configured,false);assert.equal(result.nextChanged,true);assert.equal(result.restoredPosition,true);
+    await owner.evaluate(root=>root.removeAttribute('data-settings'));assert.equal((await nativeAutoplayV2(owner)).manualVerified,true,'actual params enabled:false proves manual even without a declaration');
+    await owner.evaluate(root=>{const runtime=(root.querySelector('.swiper') as any).swiper;runtime.params.autoplay={enabled:true};runtime.autoplay.running=false;});await assert.rejects(()=>verifyInteractionV2(page,'#owner','carousel',{manual:true}),/autoplay/);
+    await owner.evaluate(root=>{const runtime=(root.querySelector('.swiper') as any).swiper;runtime.params.autoplay={enabled:false};runtime.autoplay.running=true;});await assert.rejects(()=>verifyInteractionV2(page,'#owner','carousel',{manual:true}),/autoplay/);
+    await owner.evaluate(root=>{const runtime=(root.querySelector('.swiper') as any).swiper;delete runtime.params.autoplay;runtime.autoplay.running=false;});await assert.rejects(()=>verifyInteractionV2(page,'#owner','carousel',{manual:true}),/autoplay/);
+    await page.locator('#owner').evaluate(root=>root.appendChild(root.querySelector('[data-widget_type]')!.cloneNode(true)));await assert.rejects(()=>resolveNativeCarouselV2(page.locator('#owner')),/exactly one/);
+  } finally {await browser.close();}
+});
