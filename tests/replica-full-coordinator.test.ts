@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertFullReplicaBodyScope, fullReplicaFingerprint, fullReplicaHash, validateFullReplicaManifest, validateFullReplicaReview } from '../src/replica-full/contract.js';
-import { reconcileFullReplica, reviseFullReplicaHeaderStyle, reviseFullReplicaNativeMotion, reviseFullReplicaStyle, runFullReplica } from '../src/replica-full/coordinator.js';
+import { rebaseFullReplicaCurrentDraft, reconcileFullReplica, reviseFullReplicaHeaderStyle, reviseFullReplicaNativeMotion, reviseFullReplicaStyle, runFullReplica } from '../src/replica-full/coordinator.js';
 import { prepareFullReplica } from '../src/replica-full/prepare.js';
 import { fullReplicaDelivery } from '../src/replica-full/delivery.js';
 import type { FullReplicaDependencies, FullReplicaManifest, FullReplicaPreparedBody, FullReplicaPreparedHeader, FullReplicaHeaderCheckpoint, FullReplicaPageCheckpoint, FullReplicaBodyCheckpoint, FullReplicaBoundCheckpoint, FullReplicaReview, FullReplicaRunState } from '../src/replica-full/types.js';
@@ -131,6 +131,24 @@ test('read-only reconciliation confirms a lost body response without retrying an
   assert.equal(reconciled.lastError, undefined); assert.ok(result.lastError);
   assert.equal(f.calls.filter(item => ['header', 'page', 'body', 'binding', 'publish'].includes(item)).length, mutationsBefore);
   await assert.rejects(reconcileFullReplica(f.manifest, f.dependencies, reconciled), /reconciliation_not_pending/);
+});
+
+test('explicit current-draft rebase changes only the body fingerprint after a prewrite layout failure', async () => {
+  const fixtureData = fixture(), built = await runFullReplica(fixtureData.manifest, fixtureData.dependencies);
+  assert.ok('kind' in built); if (!('kind' in built)) return;
+  const pending = structuredClone(built);
+  pending.pending = { operationId: 'pending-layout', taskId: pending.taskId, runId: pending.runId, phase: 'layout-revision', expectedCheckpointHash: fullReplicaHash(pending.checkpoints), createdAt: new Date().toISOString() };
+  pending.status = 'write-unknown'; pending.lastError = { phase: 'layout-revision', operationId: 'pending-layout', code: 'replica_full_body_driver_bound_fingerprint_changed' };
+  const oldFingerprint = fullReplicaFingerprint(pending.checkpoints.bound!);
+  let reads = 0;
+  fixtureData.dependencies.rebaseCurrentDraft = async (bound, operation, currentBodyHash, currentDocumentHash) => { reads++; assert.equal(operation.operationId, 'pending-layout'); assert.equal(currentBodyHash, h('b')); assert.equal(currentDocumentHash, h('c')); return { ...bound, bodyHash: currentBodyHash, documentHash: currentDocumentHash }; };
+  await assert.rejects(rebaseFullReplicaCurrentDraft(fixtureData.manifest, fixtureData.dependencies, pending, h('0'), h('b'), h('c')), /rebase_expected_state_invalid/);
+  assert.equal(reads, 0);
+  const rebased = await rebaseFullReplicaCurrentDraft(fixtureData.manifest, fixtureData.dependencies, pending, oldFingerprint, h('b'), h('c'));
+  assert.equal(reads, 1); assert.equal(rebased.pending, null); assert.equal(rebased.status, 'awaiting-review'); assert.equal(rebased.revision, built.revision + 1);
+  assert.equal(rebased.checkpoints.body?.bodyHash, h('b')); assert.equal(rebased.checkpoints.bound?.bodyHash, h('b')); assert.equal(rebased.checkpoints.bound?.documentHash, h('c'));
+  assert.deepEqual(rebased.checkpoints.page, built.checkpoints.page); assert.deepEqual(rebased.checkpoints.header, built.checkpoints.header);
+  assert.equal(rebased.lastError, undefined); assert.deepEqual(pending.checkpoints, built.checkpoints);
 });
 
 test('reconciliation preserves a conflict and a confirmed before state merely clears intent', async () => {

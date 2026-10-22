@@ -28,7 +28,7 @@ function sourcePackets() {
   });
 }
 test('new default requires source-bound decisions before jobs; frozen v2 tasks retain responsive v1', async () => {
-  assert.equal(CURRENT_REPLICA_WORKFLOW_VERSION, 3);
+  assert.equal(CURRENT_REPLICA_WORKFLOW_VERSION, 4);
   const f = await preparationIOFixture(); try {
     const source: any = { version: 1, tablet: 'desktop', mobileMaxWidth: 768, viewports: views, source: { path: 'phone.json', sha256: 'a'.repeat(64) } };
     assert.equal(validatePreparationPlan({ ...f.plan, version: 2, responsive: source }).responsive!.version, 1);
@@ -37,7 +37,13 @@ test('new default requires source-bound decisions before jobs; frozen v2 tasks r
     const current = { ...f.plan, version: 3 as const, responsive: { ...source, version: 2 as const, decisions: d } };
     assert.equal(validatePreparationPlan(current).version, 3);
     const withoutVersion: any = { ...current }; delete withoutVersion.version;
-    assert.equal(validatePreparationPlan(withoutVersion).version, 3);
+    assert.throws(() => validatePreparationPlan(withoutVersion), /phone_visual_audit_required/);
+    const next = { ...current, version: 4 as const, bodyBase: { ...current.bodyBase, visualAuditVersion: 3 as const }, responsive: { ...current.responsive, carouselMotionSource: source.source } };
+    assert.equal(validatePreparationPlan(next).version, 4);
+    const defaultNext: any = { ...next }; delete defaultNext.version;
+    assert.equal(validatePreparationPlan(defaultNext).version, 4);
+    const missingMotion: any = structuredClone(next); delete missingMotion.responsive.carouselMotionSource;
+    assert.throws(() => validatePreparationPlan(missingMotion), /phone_carousel_motion_source_required/);
     const before = preparationSharedHash(current); d.carousels[0].views[0].visibleItems = 3;
     assert.notEqual(preparationSharedHash(current), before);
     assert.throws(() => responsiveSourceSchema.parse({ ...source, version: 2 }), /version mismatch/);

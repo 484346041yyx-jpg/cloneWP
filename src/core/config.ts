@@ -23,7 +23,12 @@ export async function loadConfig(root = process.cwd()): Promise<{ root: string; 
   const config = projectSchema.parse(await readJson(path.join(root, 'config/project.json')));
   const credentialPath = path.resolve(root, config.credentialsFile);
   if (!credentialPath.startsWith(root + path.sep)) throw new Error('Credentials path must stay inside the project');
-  const credentials = z.object({ wp_user: z.string().min(1), wp_app_password: z.string().min(1) }).parse(await readJson(credentialPath));
+  const credentialsFromEnvironment = process.env.CLONEWP_WP_USER !== undefined || process.env.CLONEWP_WP_APP_PASSWORD !== undefined;
+  const credentials = z.object({ wp_user: z.string().min(1), wp_app_password: z.string().min(1) }).parse(
+    credentialsFromEnvironment
+      ? { wp_user: process.env.CLONEWP_WP_USER, wp_app_password: process.env.CLONEWP_WP_APP_PASSWORD }
+      : await readJson(credentialPath),
+  );
   if (new URL(config.targetUrl).protocol !== 'https:') throw new Error('Target must use HTTPS');
   return { root, config, credentials };
 }

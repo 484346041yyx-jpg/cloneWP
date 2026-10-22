@@ -146,7 +146,9 @@ export async function createHeaderBundle(directory: string, input: unknown, medi
   const initial: HeaderBundleState = { version: 1, identity, confirmed: null, pending: null, revision: 0 };
   const files: Record<string, string> = {
     'header.json': safeJSON({ version: 1, kind: 'clonewp-header-layout', moduleKey: plan.moduleKey, targetOrigin: plan.targetOrigin, owner: plan.owner, name: plan.name, layout: plan.layout, ...(plan.menuContent ? { menuContent: plan.menuContent } : {}), ...(plan.menuItemMedia ? { menuItemMedia: plan.menuItemMedia } : {}) }),
-    'menus.json': safeJSON(plan.menus), 'header.css': plan.style.css, 'fonts.json': safeJSON(plan.style.fonts),
+    'menus.json': safeJSON(plan.menus.map(({ dropdowns: _dropdowns, ...menu }) => menu)),
+    'dropdowns.json': safeJSON(Object.fromEntries(plan.menus.filter(menu => menu.dropdowns).map(menu => [menu.key, menu.dropdowns]))),
+    'header.css': plan.style.css, 'fonts.json': safeJSON(plan.style.fonts),
     'media.json': safeJSON(media), 'identity.json': safeJSON(identity), 'state.json': safeJSON(initial),
   };
   for (const [name, bytes] of Object.entries(files)) await writeNew(path.join(staging, name), bytes);
@@ -161,7 +163,17 @@ export async function loadHeaderBundle(directory: string): Promise<HeaderBundle>
   const actual = await checkedDirectory(directory);
   const header = z.object({ version: z.literal(1), kind: z.literal('clonewp-header-layout'), moduleKey: z.string(), targetOrigin: z.string(), owner: z.unknown(), name: z.string(), layout: z.unknown(), menuContent: z.unknown().optional(), menuItemMedia: z.unknown().optional() }).strict().parse(await jsonFile(actual, 'header.json'));
   const menus = await jsonFile(actual, 'menus.json'), fonts = await jsonFile(actual, 'fonts.json'), css = await textFile(actual, 'header.css');
-  const plan = validateHeaderModulePlan({ ...header, kind: 'clonewp-header-module', menus, style: { css, fonts } });
+  let dropdowns: unknown = {};
+  try { dropdowns = await jsonFile(actual, 'dropdowns.json'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  if (!Array.isArray(menus) || !dropdowns || typeof dropdowns !== 'object' || Array.isArray(dropdowns) || Object.keys(dropdowns).some(key => !menus.some(menu => menu?.key === key))) fail('dropdowns_invalid');
+  const configuredMenus = menus.map(menu => {
+    if (!menu || typeof menu !== 'object') return menu;
+    const values = (dropdowns as Record<string, unknown>)[menu.key];
+    if (values === undefined) return menu;
+    if (Object.hasOwn(menu, 'dropdowns')) fail('dropdowns_duplicate');
+    return { ...menu, dropdowns: values };
+  });
+  const plan = validateHeaderModulePlan({ ...header, kind: 'clonewp-header-module', menus: configuredMenus, style: { css, fonts } });
   safeJSON(plan);
   const state = validatedState(await jsonFile(actual, 'state.json'));
   assertIdentity(state, plan, await jsonFile(actual, 'identity.json'));

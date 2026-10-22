@@ -12,6 +12,7 @@ import { readNative44CurrentState, type Native44CurrentState } from '../native44
 import { readNative44Publication } from '../native44/publication.js';
 import { resolveFinalDeliveryPolicy, finalDeliveryNextAction } from '../core/delivery-policy.js';
 import { fullReplicaContext } from './full-replica.js';
+import { headerModuleContext } from './header-module.js';
 
 export interface ContextServices {
   readCurrentRelease(root: string, options?: { learningRelease?: ComponentFileRef | null }): Promise<SystemRelease>;
@@ -122,7 +123,8 @@ export async function loadContext(options: ContextLoadOptions, dependencies: Con
     if (!CONTEXT_INTENTS.includes(options.intent)) throw Error('context_intent_invalid');
     if (options.components && (new Set(options.components).size !== options.components.length || options.components.some(type => !/^[a-zA-Z][a-zA-Z\d_-]{0,100}$/.test(type)))) throw Error('context_components_invalid');
     reader = new ContextReader(await realpath(options.root));
-    const full = await fullReplicaContext(reader.root, options, bytes => { libraryFilesRead++; libraryBytesRead += bytes; });
+    const full = await fullReplicaContext(reader.root, options, bytes => { libraryFilesRead++; libraryBytesRead += bytes; })
+      ?? await headerModuleContext(reader.root, options, bytes => { libraryFilesRead++; libraryBytesRead += bytes; });
     if (full) {
       Object.assign(result, full);
       for (const name of ['AGENTS.md', 'SYSTEM.md', 'COMPONENTS.md', '.agents/skills/clonewp/SKILL.md', '.agents/skills/reference-elementor/SKILL.md']) {

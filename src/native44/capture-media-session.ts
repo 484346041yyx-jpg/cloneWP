@@ -113,6 +113,61 @@ export async function createNative44CaptureMediaSession(page: Page, concurrency 
             result.visible = rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
             result.box = { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height };
             result.css = Object.fromEntries(['display', 'max-width', 'padding', 'margin', 'gap', 'font-family', 'font-size', 'line-height', 'color', 'background-color', 'background-image', 'grid-template-columns'].map(key => [key, style.getPropertyValue(key)]));
+            const solidBackground = (() => {
+              for (let node: Element | null = element; node; node = node.parentElement) {
+                const css = getComputedStyle(node);
+                if (css.backgroundImage !== 'none') return null;
+                const match = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+))?\s*\)/i.exec(css.backgroundColor);
+                if (!match) return null;
+                const alpha = match[4] === undefined ? 1 : Number(match[4]);
+                if (alpha === 1) return css.backgroundColor;
+                if (alpha !== 0) return null;
+              }
+              return null;
+            })();
+            const texts: Array<{ text: string; color: string; fontSize: string; lineHeight: string; x: number; width: number; height: number; lineCount?: number; whiteSpace: string; control?: { width: number; height: number; background: string; color: string; borderBottomWidth: string; beforeContent: string; afterContent: string } }> = [];
+            const textWalker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            for (let textNode = textWalker.nextNode(); textNode && texts.length < 400; textNode = textWalker.nextNode()) {
+              const node = textNode.parentElement, value = textNode.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+              if (!node || value.length < 3 || value.length > 240) continue;
+              const box = node.getBoundingClientRect(), css = getComputedStyle(node);
+              if (box.width <= 0 || box.height <= 0 || css.display === 'none' || css.visibility !== 'visible') continue;
+              const host = node.closest('a,button,[role="tab"],[role="button"],[role="link"]');
+              const control = host ? (() => { const visual = getComputedStyle(host), bounds = host.getBoundingClientRect(); return { width: bounds.width, height: bounds.height, background: visual.backgroundColor, color: visual.color, borderBottomWidth: visual.borderBottomWidth, beforeContent: getComputedStyle(host, '::before').content, afterContent: getComputedStyle(host, '::after').content }; })() : undefined;
+              const numericLineHeight = Number.parseFloat(css.lineHeight), lineCount = Number.isFinite(numericLineHeight) && numericLineHeight > 0 ? Math.max(1, Math.round(box.height / numericLineHeight)) : undefined;
+              texts.push({ text: value, color: css.color, fontSize: css.fontSize, lineHeight: css.lineHeight, x: box.x - rect.x, width: box.width, height: box.height, ...(lineCount ? { lineCount } : {}), whiteSpace: css.whiteSpace, ...(control ? { control } : {}) });
+            }
+            const progress = Array.from(element.querySelectorAll('*')).filter(node => /(?:^|\s)(?:splide-carousel-progress|swiper-pagination-progressbar|wd-[\w-]*progress)(?:\s|$)/.test(node.getAttribute('class') ?? '')).flatMap(node => {
+              const box = node.getBoundingClientRect(); if (box.width <= 0 || box.height <= 0) return [];
+              const fill = node.querySelector('[class*="progress-bar"],[class*="progressbar-fill"]'), fillBox = fill?.getBoundingClientRect();
+              return [{ x: box.x - rect.x, width: box.width, height: box.height, background: getComputedStyle(node).backgroundColor, fillFraction: fillBox ? fillBox.width / box.width : null }];
+            });
+            const arrows = Array.from(element.querySelectorAll('button,a')).flatMap(node => {
+              const name = `${node.getAttribute('class') ?? ''} ${node.getAttribute('aria-label') ?? ''}`;
+              const side = /(?:^|[\s_-])prev(?:ious)?(?:[\s_-]|$)/i.test(name) ? 'prev' as const : /(?:^|[\s_-])next(?:[\s_-]|$)/i.test(name) ? 'next' as const : null;
+              if (!side || !/(?:arrow|swiper-button|slider-button|carousel-button|splide)/i.test(name)) return [];
+              const visual = getComputedStyle(node), box = node.getBoundingClientRect(), icon = node.querySelector('svg,i'), iconBox = icon?.getBoundingClientRect(), iconStyle = icon && getComputedStyle(icon);
+              const before = !iconStyle && getComputedStyle(node, '::before'), after = !iconStyle && getComputedStyle(node, '::after');
+              const pseudo = before && !['none', 'normal'].includes(before.content) ? before : after && !['none', 'normal'].includes(after.content) ? after : null;
+              const size = (value: string, fallback: number) => /^\d+(?:\.\d+)?px$/.test(value) ? Number.parseFloat(value) : fallback;
+              return [{ side, x: box.x - rect.x, width: size(visual.width, box.width), height: size(visual.height, box.height), background: visual.backgroundColor, color: visual.color, borderRadius: visual.borderRadius, iconWidth: iconStyle ? size(iconStyle.width, iconBox?.width ?? 0) : pseudo ? size(pseudo.width, size(pseudo.fontSize, 0)) : null, iconHeight: iconStyle ? size(iconStyle.height, iconBox?.height ?? 0) : pseudo ? size(pseudo.height, size(pseudo.fontSize, 0)) : null }];
+            });
+            const paintLayers = [element, ...Array.from(element.querySelectorAll('*'))].flatMap(node => {
+              const box = node.getBoundingClientRect(), css = getComputedStyle(node);
+              if (box.width <= 0 || box.height <= 0 || css.display === 'none' || css.visibility !== 'visible' || Number(css.opacity) === 0) return [];
+              const backgroundImage = css.backgroundImage === 'none' ? 'none' as const : /gradient\(/i.test(css.backgroundImage) ? 'gradient' as const : 'image' as const;
+              const backgroundAlpha = /rgba?\(\s*[\d.]+[,\s]+[\d.]+[,\s]+[\d.]+(?:[,\s/]+([\d.]+))?\s*\)/i.exec(css.backgroundColor)?.[1];
+              const hasBackground = backgroundAlpha === undefined ? css.backgroundColor !== 'transparent' : Number(backgroundAlpha) > 0;
+              if (!hasBackground && backgroundImage === 'none' && (Number.parseFloat(css.borderWidth) <= 0 || css.borderStyle === 'none') && css.boxShadow === 'none') return [];
+              return [{ x: box.x - rect.x, y: box.y - rect.y, width: box.width, height: box.height,
+                background: css.backgroundColor, backgroundImage, borderWidth: css.borderWidth, borderColor: css.borderColor,
+                borderRadius: css.borderRadius, boxShadow: css.boxShadow, opacity: css.opacity }];
+            });
+            const mediaGeometry = Array.from(element.querySelectorAll('img,svg')).filter(node => {
+              const box = node.getBoundingClientRect(), visual = getComputedStyle(node);
+              return box.width > 0 && box.height > 0 && visual.display !== 'none' && visual.visibility === 'visible';
+            }).slice(0, 100).map(node => { const box = node.getBoundingClientRect(); return { x: box.x - rect.x, y: box.y - rect.y, width: box.width, height: box.height }; });
+            result.visual = { solidBackground, texts, progress, arrows, mediaGeometry, paintLayers };
             result.media = uses.filter(use => element.contains(use.candidate.node)).map(use => ({ url: use.url, kind: use.kind, drawable: use.drawable, owner: use.candidate.owner, moduleKey: module.key, box: use.candidate.box, clip: use.candidate.clip }));
             metrics.displayedUses += result.media.length;
             result.state = { ...(element.hasAttribute('aria-expanded') ? { expanded: element.getAttribute('aria-expanded') === 'true' } : {}), hover: element.matches(':hover') };

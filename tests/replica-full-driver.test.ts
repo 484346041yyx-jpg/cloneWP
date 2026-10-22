@@ -49,6 +49,26 @@ test('fixed motion accepts no caller speed and verifies unique safe widget IDs i
   await assert.rejects(driver.mutate(identity, { ...request, payload: { pageId: 99, speed: 300 } }, intent), /motion_payload_invalid/); assert.equal(calls, 0); assert.deepEqual((await driver.mutate(identity, request, intent)).result.widgetIds, ids);
   for (const invalid of [[], ['duplicate', 'duplicate'], ['https://bad.example'], [99]]) { ids = invalid; await assert.rejects(driver.mutate(identity, request, intent), /motion_readback_invalid/); }
 });
+test('layout driver accepts only a typed container plan under the exact owned-page intent', async () => {
+  let calls = 0;
+  const value = remoteSnapshot();
+  value.page = { pageId: 99, runId: identity.owner.runId, status: 'draft', template: 'elementor_header_footer', title: 'Alder', slug: 'alder', headerId: identity.headerId, elements: [], settings: {}, bodyHash: hash, built: true, publicUrl: 'https://target.example/alder/', flags: { _woodmart_prefooter_off: '1', _woodmart_footer_off: '1', _woodmart_copyrights_off: '1' } };
+  value.header.snapshot.module = { pages: { 99: {} }, identity } as any;
+  const driver = new WordPressFullReplicaDriver({ origin: identity.targetOrigin, async readPHP<T>(): Promise<T> { throw Error('No read expected'); }, async executePHP<T>(operation: { code: string }) {
+    calls++;
+    assert.match(operation.code, /\$containerTreePatch=static function/);
+    const encoded = operation.code.match(/\$input=json_decode\(base64_decode\('([^']+)'\)/)![1], input = JSON.parse(Buffer.from(encoded, 'base64').toString()), result = { pageId: 99 };
+    value.receipts[input.operationId] = { action: 'layout', payloadHash: headerJsonHash(input.payload), state: 'complete', result };
+    return { ok: true, value: { snapshot: value, result } } as T;
+  } });
+  const plan = { version: 1, kind: 'clonewp-container-tree-plan', operations: [{ kind: 'set-controls', elementId: 'section1', controls: { flex_direction: 'row' } }] };
+  const request = { action: 'layout' as const, operationId: 'layout-1', expectedHash: hash, payload: { pageId: 99, plan } }, intent = { operationId: 'layout-1', runId: identity.owner.runId, resource: `full-replica/${identity.moduleKey}`, expectedSnapshotSha256: hash, persistedIntentSha256: hash };
+  await assert.rejects(driver.mutate(identity, { ...request, payload: { ...request.payload, html: '<p>bad</p>' } }, intent), /layout_payload_invalid/);
+  await assert.rejects(driver.mutate(identity, { ...request, payload: { pageId: 99, plan: { ...plan, operations: [{ ...plan.operations[0], controls: { custom_css: 'body{}' } }] } } }, intent), /layout_payload_invalid/);
+  assert.equal(calls, 0);
+  assert.deepEqual((await driver.mutate(identity, request, intent)).result, { pageId: 99 });
+  assert.equal(calls, 1);
+});
 for (const action of ['navigation-forms', 'navigation-return'] as const) test(`${action} driver accepts typed source navigation only and requires the exact generated widget receipt`, async () => {
   const form = { key: 'filter', slotComponentKey: 'products_search', sourceUnitIds: ['desktop/products'], sourceFactIds: ['desktop:interaction:form'], sourceEvidence: { path: 'form-source.json', sha256: hash }, method: 'get', action: 'https://hoshiichi.com/all_product', fields: [{ name: 'application', label: '用途:', options: [{ label: 'すべて', value: '' }] }], submitLabel: '検索' };
   const value = remoteSnapshot(); value.page = { pageId: 99, runId: identity.owner.runId, status: 'draft', template: 'elementor_header_footer', title: 'HOSHIICHI', slug: 'hoshiichi', headerId: null, elements: [], settings: {}, bodyHash: hash, built: true, publicUrl: 'https://target.example/hoshiichi/', flags: { _woodmart_prefooter_off: '1', _woodmart_footer_off: '1', _woodmart_copyrights_off: '1' } }; value.header.snapshot.module = { pages: { 99: {} }, identity } as any;

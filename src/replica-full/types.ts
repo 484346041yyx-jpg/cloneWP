@@ -6,7 +6,7 @@ import type { ResponsivePlan } from '../replica-responsive/contract.js';
 export interface FullReplicaFileRef { path: string; sha256: string }
 export interface FullReplicaSourcePartition { allUnits: string[]; headerUnits: string[]; bodyUnits: string[] }
 export interface FullReplicaManifest {
-  version: 1 | 2 | 3; kind: 'clonewp-full-replica'; taskId: string; runId: string;
+  version: 1 | 2 | 3 | 4; kind: 'clonewp-full-replica'; taskId: string; runId: string;
   title: string; slug: string; sourceUrl: string; targetOrigin: string;
   headerProvider: 'woodmart-header-builder' | 'component';
   deliveryPolicy: 'publish-after-review';
@@ -59,7 +59,7 @@ export interface FullReplicaReview {
 export interface FullReplicaPublishedCheckpoint extends Omit<FullReplicaBoundCheckpoint, 'previewUrl'> {
   status: 'publish'; publicUrl: string;
 }
-export type FullReplicaRemotePhase = 'header' | 'page' | 'body' | 'binding' | 'publish' | 'style-revision' | 'header-style-revision' | 'motion-revision' | 'navigation-return-revision';
+export type FullReplicaRemotePhase = 'header' | 'page' | 'body' | 'binding' | 'publish' | 'style-revision' | 'header-style-revision' | 'motion-revision' | 'layout-revision' | 'navigation-return-revision';
 export interface FullReplicaOperation {
   operationId: string; taskId: string; runId: string; phase: FullReplicaRemotePhase;
   expectedCheckpointHash: string; createdAt: string;
@@ -90,6 +90,8 @@ export interface FullReplicaDependencies {
   reviseStyle?(prepared: FullReplicaPrepared, bound: FullReplicaBoundCheckpoint, css: FullReplicaFileRef, operation: FullReplicaOperation): Promise<FullReplicaBoundCheckpoint>;
   reviseHeaderStyle?(prepared: FullReplicaPrepared, bound: FullReplicaBoundCheckpoint, css: FullReplicaFileRef, operation: FullReplicaOperation): Promise<FullReplicaHeaderStyleRevision>;
   reviseNativeMotion?(prepared: FullReplicaPrepared, bound: FullReplicaBoundCheckpoint, operation: FullReplicaOperation): Promise<FullReplicaBoundCheckpoint>;
+  reviseLayout?(prepared: FullReplicaPrepared, bound: FullReplicaBoundCheckpoint, plan: FullReplicaFileRef, operation: FullReplicaOperation): Promise<FullReplicaBoundCheckpoint>;
+  rebaseCurrentDraft?(bound: FullReplicaBoundCheckpoint, operation: FullReplicaOperation, currentBodyHash: string, currentDocumentHash: string): Promise<FullReplicaBoundCheckpoint>;
   reviseNavigationReturn?(prepared: FullReplicaPrepared, bound: FullReplicaBoundCheckpoint, operation: FullReplicaOperation): Promise<FullReplicaBoundCheckpoint>;
   /** Read-only remote reconciliation. `before` confirms no mutation occurred; it never retries. */
   reconcileOperation?(prepared: FullReplicaPrepared, operation: FullReplicaOperation, checkpoints: FullReplicaRunState['checkpoints']): Promise<FullReplicaReconciliation>;

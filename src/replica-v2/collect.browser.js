@@ -164,7 +164,19 @@ function captureAnimationLayoutV2(element, styleCache = new Map(), animatedCache
   const box = node => {
     const css = style(node), parent = node.offsetParent;
     let x, y;
-    if (parent) {
+    if (!Number.isFinite(node.offsetLeft) || !Number.isFinite(node.offsetTop)) {
+      // SVG descendants have no offsetLeft/Top. Their painted displacement
+      // relative to the parent cancels an animated ancestor's transform.
+      const ancestor = node.parentElement;
+      const painted = node.getBoundingClientRect();
+      if (!ancestor) { x = painted.x + scrollX; y = painted.y + scrollY; }
+      else {
+        const parentPainted = ancestor.getBoundingClientRect();
+        const stableParent = animated(ancestor) ? box(ancestor) : {x: parentPainted.x + scrollX, y: parentPainted.y + scrollY};
+        x = stableParent.x + painted.x - parentPainted.x;
+        y = stableParent.y + painted.y - parentPainted.y;
+      }
+    } else if (parent) {
       const bounds = animated(parent) ? box(parent) : parent.getBoundingClientRect();
       x = bounds.x + (animated(parent) ? 0 : scrollX) + parent.clientLeft + node.offsetLeft - parent.scrollLeft;
       y = bounds.y + (animated(parent) ? 0 : scrollY) + parent.clientTop + node.offsetTop - parent.scrollTop;
@@ -250,6 +262,26 @@ function collectHoverStateV2(options = {}) {
   const style = element => { const result = {}; for (const pseudo of ['', '::before', '::after']) { const computed = getComputedStyle(element, pseudo || null); result[pseudo || 'element'] = Object.fromEntries([...properties, 'content'].map(property => [property, computed.getPropertyValue(property)])); } return result; };
   const observe = selector => { const matches = document.querySelectorAll(selector); if (matches.length !== 1) throw new Error(`Hover affected selector is not unique: ${selector}`); const element = matches[0], rect = element.getBoundingClientRect(); return { selector, tag: element.tagName.toLowerCase(), text: element.textContent.replace(/\s+/g, ' ').trim().slice(0, 200), rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, currentSrc: element.tagName === 'IMG' ? element.currentSrc : null, styles: style(element) }; };
   return { version: 1, kind: 'source-hover-state', sourceUrl, stage, observedAt: new Date().toISOString(), screenshotHash, triggerSelector, hovered, affected: [triggerSelector, ...affectedSelectors.filter(selector => selector !== triggerSelector)].map(observe) };
+}
+
+/** Record CSS hover declarations whose painted trigger is covered by another
+ * element even after its own carousel state has been activated. This is a
+ * read-only hit test; the caller supplies the real activation and screenshot. */
+function collectHoverReachabilityV2(options = {}) {
+  const { sourceUrl, triggerSelector, screenshotHash } = options;
+  if (sourceUrl !== location.href || typeof triggerSelector !== 'string' || !triggerSelector || !/^[a-f0-9]{64}$/.test(screenshotHash || '')) throw new Error('Invalid hover reachability probe');
+  const matches = document.querySelectorAll(triggerSelector);
+  if (matches.length !== 1) throw new Error('Hover reachability selector is not unique');
+  const trigger = matches[0], rect = trigger.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0 || rect.left < 0 || rect.top < 0 || rect.right > document.documentElement.clientWidth || rect.bottom > innerHeight) throw new Error('Hover reachability trigger is not fully in viewport');
+  if (trigger.matches(':hover')) throw new Error('Hover reachability requires pointer away from trigger');
+  const hits = [];
+  for (const fy of [0.2, 0.5, 0.8]) for (const fx of [0.2, 0.5, 0.8]) {
+    const x = rect.left + rect.width * fx, y = rect.top + rect.height * fy;
+    const hit = document.elementFromPoint(x, y);
+    hits.push({ x, y, hitSelector: hit ? sceneSelectorV2(hit) : null, targetOrDescendant: hit === trigger || !!hit && trigger.contains(hit) });
+  }
+  return { version: 1, kind: 'source-hover-unreachable', sourceUrl, observedAt: new Date().toISOString(), screenshotHash, triggerSelector, triggerRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, pointerEvents: getComputedStyle(trigger).pointerEvents, hits };
 }
 
 /** Independent whole-body denominator, evaluated once with ALL region selectors.

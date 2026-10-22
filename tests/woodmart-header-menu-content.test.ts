@@ -24,6 +24,20 @@ test('rich static mega menus compile through native widgets without manufacturin
   media.assets=await f.put('imported.json',[]);await assert.rejects(prepareHeaderMenuContentLocal([media]),/media_ledger_incomplete/);
  }finally{await f.cleanup();}
 });
+test('full replica mega menu binds its native image to the page-owned imported header asset',async()=>{
+ const f=await contentFixture();try{
+  const entry:import('../src/woodmart-header/generic/menu-content.js').HeaderMenuContent={...f.entry,version:2,dropdown:{design:'full-width',colorScheme:'default',event:'hover'},assetSource:'header-assets'};
+  if(entry.program.blocks[0].kind==='composite')entry.program.blocks[0].children.splice(1,1,{kind:'native',key:'photo',widgetType:'wd_image_or_svg',widgetSettings:{image:{$asset:'photo'}},sourceFactIds:(entry.program.blocks[0].children[0] as any).sourceFactIds});
+  assert.doesNotThrow(()=>validateHeaderMenuContent([entry],menus,'service-run'));
+  await prepareHeaderMenuContentLocal([entry]);
+  const client=contentClient(origin);client.readTargetCatalog=async()=>{throw Error('Static content must not read products');};
+  await assert.rejects(compileHeaderMenuContent([entry],client,origin,'a'.repeat(64),f.directory),/media_ledger_invalid/);
+  const imported=[{key:'photo',attachmentId:111,url:origin+'/uploads/photo.jpg',sourceUrl:'https://header-source.example/photo.jpg',sha256:'a'.repeat(64),mimeType:'image/jpeg'}];
+  const [prepared]=await compileHeaderMenuContent([entry],client,origin,'a'.repeat(64),f.directory,imported);
+  assert.equal(prepared.payload.media?.[0].attachmentId,111);
+  assert.equal((prepared.payload.elements[0].elements.find(node=>node.widgetType==='wd_image_or_svg')?.settings.image as any).id,111);
+ }finally{await f.cleanup();}
+});
 test('native dropdown settings and exact branch retirement cannot expand their scope',()=>{
  assert.throws(()=>compileHeaderDropdown({design:'sized',colorScheme:'light',event:'hover'}),/requires width/);
  assert.throws(()=>compileHeaderDropdown({design:'full-width',width:800,colorScheme:'light',event:'hover'}),/Dimensions/);

@@ -112,7 +112,7 @@ async function sourceInputs(plan: PreparationPlan) {
     }
     if (reviews.length !== 1) fail('source_hover_review_missing');
     const review = verifySourceHoverReview(facts, reviews[0].value);
-    for (const row of review.rows) for (const capture of row.captures) await bytesBound(capture.screenshot, path.dirname(path.resolve(path.dirname(plan.sourceEvidence.path), reviews[0].ref.path)));
+    for (const row of review.rows) for (const screenshot of 'captures' in row ? row.captures.map(capture => capture.screenshot) : [row.unreachable.screenshot]) await bytesBound(screenshot, path.dirname(path.resolve(path.dirname(plan.sourceEvidence.path), reviews[0].ref.path)));
   }
   const allUnits = units.units?.map((unit: any) => unit.id); if (!Array.isArray(allUnits) || new Set(allUnits).size !== allUnits.length || preparationHash([...allUnits].sort()) !== preparationHash([...plan.sourcePartition.allUnits].sort())) fail('source_units');
   for (const section of plan.sections) for (const factId of section.sourceFactIds) {
@@ -124,7 +124,7 @@ async function sourceInputs(plan: PreparationPlan) {
     const expected = units.units.filter(unit => section.sourceUnitIds.includes(unit.id)).flatMap(unit => unit.sourceFactIds);
     if (preparationHash(expected.sort()) !== preparationHash([...section.sourceFactIds].sort())) fail('section_fact_ownership');
   }
-  for (const ref of [plan.headerAssets, plan.bodyAssets, plan.bodyBase.componentCatalog, plan.bodyBase.knowledge, plan.bodyBase.componentPlan, ...plan.shared.decisions.flatMap(row => row.evidence), ...plan.shared.compatibility.flatMap(row => row.evidence)]) await bytesBound(ref);
+  for (const ref of [plan.headerAssets, plan.bodyAssets, plan.bodyBase.componentCatalog, plan.bodyBase.knowledge, plan.bodyBase.componentPlan, ...(plan.responsive?.carouselMotionSource ? [plan.responsive.carouselMotionSource] : []), ...plan.shared.decisions.flatMap(row => row.evidence), ...plan.shared.compatibility.flatMap(row => row.evidence)]) await bytesBound(ref);
   if (plan.responsive) await verifyResponsiveSource(plan.responsive, plan, async (ref, base = ROOT) => { const filename = await preparationPath(path.resolve(base, ref.path)); await bytesBound(ref, base); return { filename, bytes: await readFile(filename) }; });
   return { sourceFacts: facts, sourceUnits: units };
 }

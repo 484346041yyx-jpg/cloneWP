@@ -1,7 +1,7 @@
 {
-  "siteKey": "primevapeoutlet",
-  "targetUrl": "https://primevapeoutlet.com/",
-  "credentialsFile": "config/credentials.local.json",
+  "siteKey": "vapeversse",
+  "targetUrl": "https://vapeversse.com/",
+  "credentialsFile": "config/credentials.vapeversse.local.json",
   "viewports": [
     {
       "name": "desktop",

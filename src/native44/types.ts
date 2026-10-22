@@ -37,6 +37,8 @@ export interface Native44Program {
   editorNaming?: typeof NATIVE44_NATIVE_EDITOR_NAMING;
   /** New tasks run their full visual/interaction review after the complete body and CSS. */
   reviewWorkflow?: typeof NATIVE44_WHOLE_PAGE_REVIEW_WORKFLOW;
+  /** New tasks compare actual color, type size, controls and effective section paint. */
+  visualAuditVersion?: 1 | 2 | 3;
   /** Explicit article-list substitution; absent historical programs retain their source copy contract. */
   articleListPolicy?: typeof NATIVE44_ARTICLE_LIST_POLICY;
   /** Explicit new requirement contract; absent historical tasks are never migrated. */

@@ -24,7 +24,7 @@ export function selectReplicaEntry(input:unknown,args:string[]):'preparation'|'f
 }
 export async function runReplicaEntry(args:string[],root='D:/cloneWP'):Promise<unknown>{
  if(!args.length||args.includes('--help'))return {help:PREPARATION_HELP+'\n'+FULL_REPLICA_HELP+'\nPrepared full manifest: create:replica -- FULL_MANIFEST.json [--run-dir DIR]\nPreserved component path: create:replica:component -- PROGRAM.json\nFrozen legacy resume: create:replica -- PROGRAM.json --resume RUN_DIR',remoteWrites:0};
- if(['run','resume','review','publish','status','reconcile','revise-style','revise-header-style','revise-native-motion'].includes(args[0]))return runFullReplicaCLI(args);
+ if(['run','resume','review','publish','status','reconcile','revise-style','revise-header-style','revise-native-motion','revise-layout'].includes(args[0]))return runFullReplicaCLI(args);
  const filename=args.find(a=>!a.startsWith('--')&&/\.json$/i.test(a));if(!filename)throw Error('replica_full_entry_input');
  const {input,filename:absolute}=await readCreationInput(root,filename),provider=selectReplicaEntry(input,args);
  if(provider==='component'){

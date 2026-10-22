@@ -9,7 +9,7 @@ export const PREPARATION_TIMING_STAGES = [
   'source-observation', 'shared-planning', 'material-preparation',
   'prepareHeader', 'prepareBody', 'assertPreparedBody', 'createPage', 'provisionHeader', 'saveBody',
   'bindHeader', 'reviewWholePage', 'verifyReview', 'publishPage', 'reviseStyle', 'reviseHeaderStyle',
-  'reviseNativeMotion', 'reviseNavigationReturn', 'reconcileOperation',
+  'reviseNativeMotion', 'reviseLayout', 'reviseNavigationReturn', 'reconcileOperation', 'rebaseCurrentDraft',
 ] as const;
 export type PreparationTimingStage = typeof PREPARATION_TIMING_STAGES[number];
 export type PreparationTimingStatus = 'succeeded' | 'failed' | 'cancelled';
@@ -45,7 +45,7 @@ export interface PreparationTimingRecorder {
 }
 
 const stageSet = new Set<string>(PREPARATION_TIMING_STAGES);
-const commandSet = new Set(['prepare', 'run', 'resume', 'review', 'publish', 'reconcile', 'recover-style', 'revise-style', 'revise-header-style', 'revise-native-motion', 'revise-navigation-return']);
+const commandSet = new Set(['prepare', 'run', 'resume', 'review', 'publish', 'reconcile', 'rebase-current-draft', 'recover-style', 'revise-style', 'revise-header-style', 'revise-native-motion', 'revise-layout', 'revise-navigation-return']);
 const statusSet = new Set(['succeeded', 'failed', 'cancelled']);
 const sourceSet = new Set(['agent-dispatch', 'agent-start', 'external-observation']);
 const systemClock: TimingClock = { monotonicNow: () => performance.now(), utcNow: () => new Date().toISOString() };

@@ -19,7 +19,7 @@ npm run context:load -- --intent <replica|original|learn|compare|resume|maintain
 
 ## 新复刻任务的页眉默认
 
-新任务默认使用既有完整流程的v3合同与响应式v2决策：桌面与手机共同取证，在并行准备前冻结图标/文字布局角色及稳定定位、每个手机宽度的动态产品同屏数量和原生参数、整条手机页眉滚动行为与具名用户覆盖。缺决定先补观察，不交给生成阶段猜测。生成前校验方案、原生参数和编辑器稳定选择器，最后以来源及用户要求对照编辑器和前台的实际布局、数量及滚动/菜单状态。具体数值按网站确定，不把2个产品或固定页眉设为所有网站的通用值。手机实现按职责放在 src/replica-responsive/，不新建入口或另一套流水线；同一WoodMart页眉内独立配置Mobile布局，绑定任务自有菜单，平板沿用桌面。缺真实来源、决策、原生适配或验收即不通过，不能降级绕过。操作格式见 [手机响应式能力](D:/cloneWP/docs/replica-responsive.md)。显式历史v1/v2保持冻结合同，旧页面和代码不自动迁移。
+新任务默认使用既有完整流程的v4合同与响应式v2决策：桌面与手机共同取证，在并行准备前冻结图标/文字布局角色及稳定定位、每个手机宽度的动态产品同屏数量和原生参数、整条手机页眉滚动行为与具名用户覆盖。缺决定先补观察，不交给生成阶段猜测。生成前校验方案、原生参数和编辑器稳定选择器，最后以来源及用户要求对照编辑器和前台的实际布局、数量及滚动/菜单状态。具体数值按网站确定，不把2个产品或固定页眉设为所有网站的通用值。手机实现按职责放在 src/replica-responsive/，不新建入口或另一套流水线；同一WoodMart页眉内独立配置Mobile布局，绑定任务自有菜单，平板沿用桌面。缺真实来源、决策、原生适配或验收即不通过，不能降级绕过。操作格式见 [手机响应式能力](D:/cloneWP/docs/replica-responsive.md)。显式历史v1/v2保持冻结合同，旧页面和代码不自动迁移。
 
 
 新建 replica 默认使用独立 WoodMart 页眉生成器搭配 WordPress 菜单，并先执行 [并行方案准备](D:/cloneWP/docs/parallel-replica-preparation.md)。代理自动形成 `clonewp-replica-preparation` 合同并用 `npm run create:replica -- PREPARATION.json` 生成独立任务包；用户不需要填写JSON或增加技能入口。协调者先冻结真实双桌面和双手机来源、共享字体/宽度/间距/断点及版本适用的原生与兼容条件，再用当前任务的协作工具并发启动页眉/菜单一组、正文最多两组。相关布局、状态和控制依赖必须同组；只有协调者操作共享浏览器、改共享规范并统一合并，准备代理只读冻结材料、只写自己精确结果路径，不认证或写远端，不触碰其它组或全局样式。不要将本地 `Promise.all` 读取已完成方案称为真实模型并行；协作工具缺失或关键兼容未知时在认证前报告阻断，不静默降级。
@@ -70,3 +70,6 @@ npm run context:load -- --intent <replica|original|learn|compare|resume|maintain
 浏览器连接排查实例见 D:/cloneWP/reports/elementor-learning-20261016/BROWSER-CONNECTION.md；组件和容器经验见 D:/cloneWP/docs/knowledge/elementor-container-patterns.md。
 
 新任务默认使用 [统一编辑器运行与续跑](D:/cloneWP/docs/editor-completion.md)：version:2 recover 协议按任务/页面/版本持久化，沿用 incidentId/cursor/已消耗预算；原生 fidelity 检查复用同作用域的干净会话，临时编辑或还原后加载新模型，最终重开独立。先集中本轮关联调整再保存整份CSS，完全相同且fresh读回匹配则跳过内容写入；只复用单次验收内哈希未变证据并复核依赖，不缓存当前后台状态。原视觉、交互及编辑验收不减少，历史合同不迁移。
+
+## v4 手机视觉审核
+新复刻任务的 bodyBase 使用 visualAuditVersion:3。两手机视口按真实 clientWidth 逐区采样文字换行、颜色、背景和控件；轮播还需来源与目标滑动前后截图及卡片几何。按 D:/cloneWP/docs/replica-visual-audit.md 验收；证据不全在远端写入前停止。显式旧合同不迁移。

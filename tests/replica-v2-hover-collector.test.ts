@@ -44,3 +44,25 @@ test('source collector declares CSS hover owners and real pointer probe captures
     assert.throws(() => verifySourceHoverReview(facts, { ...review, rows: [{ ...review.rows[0], captures: [capture(before), capture(restored), capture(during)] }] }), /pointer_cycle_invalid/);
   } finally { await browser.close(); }
 });
+
+test('covered CSS hover owner keeps a bound nine-point unreachable proof', async () => {
+  const source = await readFile('D:/cloneWP/src/replica-v2/collect.browser.js', 'utf8');
+  const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<style>#observed{position:relative}.blocked{display:block;width:100px;height:40px}.blocked:hover{color:red}.cover{position:absolute;inset:0 auto auto 0;width:100px;height:40px;z-index:5}</style><main id="observed"><a class="blocked" href="/blocked">Blocked</a><a class="cover" href="/cover">Cover</a></main>');
+    const transport = JSON.parse(await page.evaluate(`${source};collectObservationV2({snapshotId:'covered',rootSelectors:['#observed']})`));
+    const packet = JSON.parse(transport.chunks[0].json);
+    const trigger = Object.values(packet.interactions).find((item: any) => item.kind === 'hover') as any;
+    const selector = packet.nodes[trigger.nodeId].selector;
+    await page.mouse.move(200, 200);
+    const probe = await page.evaluate(`${source};collectHoverReachabilityV2(${JSON.stringify({sourceUrl:'about:blank',triggerSelector:selector,screenshotHash:'a'.repeat(64)})})`) as any;
+    assert.equal(probe.hits.length, 9);
+    assert.ok(probe.hits.every((hit: any) => hit.targetOrDescendant === false && hit.hitSelector));
+    const facts = { sourceUrl: 'about:blank', snapshots: [{ id: 'covered', nodes: packet.nodes }], facts: { hover: { snapshotId: 'covered', nodeId: trigger.nodeId, kind: 'interaction', value: { kind: 'hover', details: { source: 'css-hover-selector' } } } } } as any;
+    const row = { snapshotId: 'covered', triggerNodeId: trigger.nodeId, unreachable: { probe, screenshot: { path: 'covered.png', sha256: probe.screenshotHash }, activation: { kind: 'other', label: 'Covered static card' } } };
+    const review = { version: 1, kind: 'source-hover-review', sourceUrl: 'about:blank', rows: [row] };
+    assert.equal(verifySourceHoverReview(facts, review).rows.length, 1);
+    assert.throws(() => verifySourceHoverReview(facts, { ...review, rows: [{ ...row, unreachable: { ...row.unreachable, probe: { ...probe, hits: [{ ...probe.hits[0], targetOrDescendant: true }, ...probe.hits.slice(1)] } } }] }), /unreachable_proof_invalid/);
+  } finally { await browser.close(); }
+});

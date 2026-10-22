@@ -15,6 +15,7 @@ export const contentSchemas: Record<string, LegacySchema> = {
   container: { type: 'container', class: 'Container', controls: { css_classes: { type: 'text' } } },
   heading: { type: 'heading', class: 'Heading', controls: { _css_classes: { type: 'text' }, title: { type: 'textarea' } } },
   wd_products: { type: 'wd_products', class: 'Products', controls: { _css_classes: { type: 'text' }, post_type: { type: 'select', options: { ids: 'IDs' } }, include: { type: 'wd_autocomplete', multiple: true }, items_per_page: { type: 'number' }, orderby: { type: 'select', options: { date: 'Date' } } } },
+  wd_image_or_svg: { type: 'wd_image_or_svg', class: 'Image', controls: { image: { type: 'media' }, _css_classes: { type: 'text' } } },
 };
 export function contentClient(origin: string): HeaderMenuContentClient {
   return {

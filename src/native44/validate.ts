@@ -31,7 +31,7 @@ const component: z.ZodType<Native44Component> = z.lazy(() => z.discriminatedUnio
 export const native44ProgramSchema = z.object({
   version:z.literal(2),workflow:z.literal('block-replication'),executionStrategy:z.literal(NATIVE44_STRATEGY),taskId:key,title:z.string().min(1),sourceUrl:z.string().url(),
   replicationProfile:z.literal(DESKTOP_BROWSER_PROFILE).optional(), selectionRulesHash:hash.optional(), requirementProfile:z.literal(NATIVE44_REQUIREMENT_PROFILE).optional(), goalProfile:z.literal(NATIVE44_COMPONENT_REFERENCE_GOAL).optional(),
-  editorNaming:z.literal(NATIVE44_NATIVE_EDITOR_NAMING).optional(), reviewWorkflow:z.literal(NATIVE44_WHOLE_PAGE_REVIEW_WORKFLOW).optional(),
+  editorNaming:z.literal(NATIVE44_NATIVE_EDITOR_NAMING).optional(), reviewWorkflow:z.literal(NATIVE44_WHOLE_PAGE_REVIEW_WORKFLOW).optional(), visualAuditVersion:z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   articleListPolicy:z.literal(NATIVE44_ARTICLE_LIST_POLICY).optional(),
   componentCatalog:ref,knowledge:ref.extend({fingerprint:hash}),targetEnvironment:z.object({woodmart:z.literal('8.5.5'),woodmartCore:z.literal('1.1.8'),elementor:z.literal('3.35.4'),elementorPro:z.literal('3.35.1')}).strict(),
   sourceFacts:ref,componentPlan:ref,assetsManifest:ref,viewports:z.array(z.object({name:z.string().min(1),width:z.number().int().positive(),height:z.number().int().positive(),stage:z.enum(['desktop','responsive'])}).strict()).min(1),blocks:z.array(component).min(1),
@@ -40,7 +40,8 @@ const productTypes = new Set(['wd_products','woocommerce-products','wd_products_
 export function validateNative44Program(input: unknown): Native44Program {
   const program=native44ProgramSchema.parse(input), keys=new Set<string>();
   const desktop = isDesktopBrowserProfile(program.replicationProfile);
-  if (!desktop && (program.editorNaming || program.reviewWorkflow || program.articleListPolicy)) throw Error('Historical native44 inputs cannot acquire new editor, article or review workflow defaults');
+  if (!desktop && (program.editorNaming || program.reviewWorkflow || program.articleListPolicy || program.visualAuditVersion)) throw Error('Historical native44 inputs cannot acquire new editor, article or review workflow defaults');
+  if (program.visualAuditVersion && !program.reviewWorkflow) throw Error('Visual audit requires the whole-page review workflow');
   if (program.requirementProfile && !desktop) throw Error('Source requirements require explicit desktop planning; historical programs are not upgraded');
   if (program.goalProfile && (!desktop || program.requirementProfile !== NATIVE44_REQUIREMENT_PROFILE)) throw Error('Component reference goal requires an explicit desktop source requirements contract');
   if (desktop) {

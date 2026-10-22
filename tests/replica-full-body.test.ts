@@ -24,6 +24,8 @@ import { reconcileFullReplica, reviseFullReplicaHeaderStyle, reviseFullReplicaNa
 import { compileNavigationFormPatch } from '../src/replica-full/navigation-form/index.js';
 import { compileNavigationReturnPatch, NAVIGATION_RETURN_RUNTIME, NAVIGATION_RETURN_V1_RUNTIME } from '../src/replica-full/navigation-return.js';
 import { contentFixture } from './fixtures/header-menu-content.js';
+import { verifyFullReplicaVisualReview } from '../src/replica-full/visual-review.js';
+import { native44ModuleClass } from '../src/native44/adapters.js';
 
 const hash = 'a'.repeat(64);
 async function fixture() {
@@ -108,11 +110,37 @@ async function actualFixture(navigation = false) {
   }
   f.manifest.sourceEvidence = evidence; f.manifest.sourcePartition = { allUnits: units.map(unit => unit.id), headerUnits: units.filter(unit => unit.id.endsWith('/header')).map(unit => unit.id), bodyUnits: units.filter(unit => unit.id.endsWith('/body')).map(unit => unit.id) }; f.manifest.body.program = program; f.manifest.body.sourceUnits = unitsRef; await f.put('manifest.json', f.manifest); return f;
 }
+test('new full replica visual review compares browser samples with frozen source packet values', async () => {
+  const f = await actualFixture(); try {
+    const program = JSON.parse(await readFile(f.manifest.body.program.path, 'utf8'));
+    f.manifest.body.program = await f.put('visual-program.json', { ...program, reviewWorkflow: 'whole-page-after-css-v1', visualAuditVersion: 1 });
+    const bound: FullReplicaBoundCheckpoint = { pageId: 999, runId: f.manifest.runId, headerId: 'header_test', editUrl: 'https://target.example/edit', previewUrl: 'https://target.example/preview', bodyHash: hash, cssHash: hash, documentHash: hash, headerHash: hash, menuHash: hash, styleHash: hash };
+    const observedAt = new Date().toISOString(), fingerprint = fullReplicaFingerprint(bound);
+    const review = { version: 1, kind: 'clonewp-full-replica-review', taskId: f.manifest.taskId, runId: f.manifest.runId, pageId: 999, fingerprint, decision: 'approved', observedAt, reviewerEvidence: f.manifest.sourceEvidence, viewports: [] } as FullReplicaReview;
+    const report = { version: 1, kind: 'clonewp-full-replica-visual-audit', pageId: 999, fingerprint, width: 1920, height: 1080, screenshotSha256: hash, observedAt, modules: [{ sourceUnitId: 'wide/body', targetSelector: `.elementor-999 .${native44ModuleClass('hero')}`, visual: { solidBackground: null, texts: [{ text: 'Alder native body', color: 'rgb(50, 50, 50)', fontSize: '16px', lineHeight: '20px', x: 0 }], progress: [] } }] };
+    const read = async (ref: FullReplicaFileRef, base = 'D:/cloneWP') => { const filename = path.resolve(base, ref.path), bytes = await readFile(filename); assert.equal(createHash('sha256').update(bytes).digest('hex'), ref.sha256); return { filename, bytes }; };
+    let reference = await f.put('visual-review.json', report);
+    const input = () => ({ manifest: f.manifest, bound, review, width: 1920, height: 1080, screenshotSha256: hash, reference, reviewDirectory: f.directory, targetHtml: `<div class="elementor-999"><div class="${native44ModuleClass('hero')}"></div></div>`, read });
+    await assert.rejects(verifyFullReplicaVisualReview(input()), /mismatch:wide\/body:.*text color/);
+    report.modules[0].visual.texts[0] = { text: 'Alder native body', color: '', fontSize: '', lineHeight: '', x: 0 };
+    const moduleRow = structuredClone(report.modules[0]);
+    reference = await f.put('visual-review.json', report);
+    await assert.doesNotReject(verifyFullReplicaVisualReview(input()));
+    await assert.rejects(verifyFullReplicaVisualReview({ ...input(), targetHtml: '<div class="elementor-999"></div>' }), /module_dom_identity/);
+    report.modules = []; reference = await f.put('visual-review.json', report);
+    await assert.rejects(verifyFullReplicaVisualReview(input()), /module_coverage/);
+    f.manifest.body.program = await f.put('visual-program-v2.json', { ...program, reviewWorkflow: 'whole-page-after-css-v1', visualAuditVersion: 2 });
+    report.modules = [moduleRow]; reference = await f.put('visual-review.json', report);
+    await assert.rejects(verifyFullReplicaVisualReview(input()), /paint_coverage/);
+    reference = await f.put('visual-review-v2.json', { ...report, modules: [{ ...moduleRow, visual: { ...moduleRow.visual, paintLayers: [] } }] });
+    await assert.doesNotReject(verifyFullReplicaVisualReview(input()));
+  } finally { await f.cleanup(); }
+});
 function nativeContract(origin: string): NativeHeaderContract {
   const slots = ['top-bar', 'general-header', 'header-bottom'] as const;
   return { kind: 'clonewp-whb-native-contract', version: 1, targetOrigin: origin, fingerprint: hash, structure: { id: 'root', type: 'root', content: slots.map(id => ({ id, type: 'row', params: {}, content: ['left', 'center', 'right'].map(position => ({ id: `${id}-${position}`, type: 'column', content: [] })) })) }, settings: {}, rowColumns: Object.fromEntries(slots.map(slot => [slot, { left: `${slot}-left`, center: `${slot}-center`, right: `${slot}-right` }])) as NativeHeaderContract['rowColumns'], rowSchema: { hide_desktop: { type: 'switcher', valueType: 'boolean', default: false } }, settingsSchema: {}, elements: { mainmenu: { type: 'mainmenu', schema: { menu_id: { type: 'select', valueType: 'string', resource: 'menu' } } } }, styleElement: { type: 'HTMLBlock', field: 'block_id', schema: { block_id: { type: 'select', valueType: 'string', resource: 'html-block' } } } };
 }
-async function adapterFlow(damageProtected = false, unknownHeaderStyle = false, bindingBefore = false, bindingRejected = false, motionMode?: 'success' | 'before' | 'after', publicationMode?: 'verified' | 'changed', navigationMode?: 'success' | 'after' | 'before' | 'drift' | 'return-after' | 'return-before', pageClaimDefaults = false, bodyBeforeFailure = false, navigationReturnMode?: 'success' | 'before' | 'after' | 'drift', sameCSS = false, menuReservation = false, interruptedStyle?: 'started'|'complete'|'drift') {
+async function adapterFlow(damageProtected = false, unknownHeaderStyle = false, bindingBefore = false, bindingRejected = false, motionMode?: 'success' | 'before' | 'after', publicationMode?: 'verified' | 'changed', navigationMode?: 'success' | 'after' | 'before' | 'drift' | 'return-after' | 'return-before', pageClaimDefaults = false, bodyBeforeFailure = false, navigationReturnMode?: 'success' | 'before' | 'after' | 'drift', sameCSS = false, menuReservation = false, interruptedStyle?: 'started'|'complete'|'drift', headerBeforeIntent = false) {
   const f = await actualFixture(!!navigationMode || !!navigationReturnMode), calls: string[] = []; let module: HeaderRemoteModule | null = null, page: FullReplicaRemotePage | null = null, globalHash = hash, sequence = 1000, connections = 0, closes = 0, reads = 0, revisionStarted = false;
   const content = menuReservation ? await contentFixture(f.manifest.runId) : undefined;
   if (content) { const menu = f.manifest.header!.plan.menus[0]; f.manifest.header!.plan = { ...structuredClone(f.manifest.header!.plan), menuContent: [{ ...content.entry, menuKey: menu.key, itemKey: menu.items[0].key }] }; await writeFile(f.manifestFile.path, JSON.stringify(f.manifest)); }
@@ -135,7 +163,7 @@ async function adapterFlow(damageProtected = false, unknownHeaderStyle = false, 
     if (request.action === 'navigation-return' && (navigationMode === 'return-before' || revisionStarted && navigationReturnMode === 'before')) throw Error('Synthetic request loss before return compatibility');
     let motionWidgetIds: string[] | undefined;
     if (request.action === 'create-page') { assert.equal(page, null); module = { identity, name: f.manifest.header!.plan.name, menus: {}, style: null, header: null, pages: {}, receipts: {} }; page = { pageId: sequence++, runId: f.manifest.runId, status: 'draft', template: 'elementor_header_footer', title: f.manifest.title, slug: f.manifest.slug, headerId: null, elements: [], settings: { template: 'elementor_header_footer', hide_title: 'yes' }, bodyHash: hash, built: true, publicUrl: `${f.manifest.targetOrigin}/${f.manifest.slug}/`, flags: { _woodmart_prefooter_off: '1', _woodmart_footer_off: '1', _woodmart_copyrights_off: '1' } }; }
-    else if (request.action === 'style') { assert.ok(page); page.settings.custom_css = request.payload.css; }
+    else if (request.action === 'style') { assert.ok(page); page.settings.custom_css = request.payload.css; page.settings.wd__woodmart_whb_header = identity.headerId; }
     else if (request.action === 'motion') { assert.ok(page); motionWidgetIds = []; const visit = (nodes: NonNullable<typeof page>['elements']) => { for (const node of nodes) { if (node.widgetType === 'nested-carousel') { node.settings.speed = 0; motionWidgetIds!.push(node.id); } visit(node.elements); } }; visit(page.elements); }
     else if (request.action === 'navigation-forms') { assert.ok(page); const patch = compileNavigationFormPatch(page.elements, request.payload.forms as any, String(request.payload.sourceUrl), String(request.payload.taskId)); page.elements = patch.elements; motionWidgetIds = patch.widgetIds; if (navigationMode === 'drift') page.settings.concurrent = true; }
     else if (request.action === 'navigation-return') { assert.ok(page); const patch = compileNavigationReturnPatch(page.elements, request.payload.forms as any, String(request.payload.sourceUrl), String(request.payload.taskId)); page.elements = patch.elements; motionWidgetIds = patch.widgetIds; if (revisionStarted && navigationReturnMode === 'drift') page.settings.concurrent = true; }
@@ -266,6 +294,18 @@ async function adapterFlow(damageProtected = false, unknownHeaderStyle = false, 
         globalHash = 'b'.repeat(64);
         const blocked = await reviseFullReplicaStyle(f.manifest, { ...deps, async writeState() {} }, result, copied, fullReplicaFingerprint(result.checkpoints.bound!));
         assert.equal(blocked.status, 'write-unknown'); assert.match(blocked.lastError!.code, /protected_changed/); assert.deepEqual(calls, beforeCalls);
+        globalHash = hash;
+        const invalid = await f.put('invalid-style.css', ':root{color:red}');
+        const preflightFailure = await reviseFullReplicaStyle(f.manifest, { ...deps, async writeState() {} }, result, invalid, fullReplicaFingerprint(result.checkpoints.bound!));
+        assert.equal(preflightFailure.status, 'write-unknown'); assert.equal(preflightFailure.pending?.phase, 'style-revision'); assert.deepEqual(calls, beforeCalls);
+        const reconciled = await reconcileFullReplica(f.manifest, { ...deps, async writeState() {} }, preflightFailure);
+        assert.equal(reconciled.status, 'awaiting-review'); assert.equal(reconciled.pending, null); assert.deepEqual(reconciled.checkpoints, result.checkpoints); assert.deepEqual(calls, beforeCalls);
+        return;
+      }
+      if (headerBeforeIntent) {
+        const operation = { operationId: randomUUID(), phase: 'header-style-revision' as const, taskId: f.manifest.taskId, runId: f.manifest.runId, expectedCheckpointHash: hash, createdAt: new Date().toISOString() };
+        const beforeCalls = [...calls], outcome = await deps.reconcileOperation!({} as any, operation, result.checkpoints);
+        assert.equal(outcome.status, 'before'); assert.deepEqual(calls, beforeCalls);
         return;
       }
       const frozenCSS = await readFile(f.manifest.body.css.path, 'utf8'), nextCSS = await f.put('qa-revision.css', ':page{color:green}'), revised = await reviseFullReplicaStyle(f.manifest, { ...deps, async writeState() {} }, result, nextCSS, fullReplicaFingerprint(result.checkpoints.bound!));
@@ -317,6 +357,7 @@ test('navigation-return revision recovers only an exact completed receipt withou
 test('navigation-return revision refuses unrelated settings drift during recovery', async () => adapterFlow(false, false, false, false, undefined, undefined, undefined, false, false, 'drift'));
 test('production factory detects protected state drift after body save and stops before binding', async () => adapterFlow(true));
 test('a lost header style response reconciles from exact independent proof and native readback without repeating the write', async () => adapterFlow(false, true));
+test('header style reconciliation clears an operation stopped before its intent only after unchanged remote readback', async () => adapterFlow(false, false, false, false, undefined, undefined, undefined, false, false, undefined, false, false, undefined, true));
 test('a binding guard that sent no write reconciles only the exact unbound body and confirmed native before state', async () => adapterFlow(false, false, true));
 test('the full binding adapter persists the native rejection code despite the old generic service catch', async () => adapterFlow(false, false, false, true));
 test('production motion revision changes only the fixed native control and preserves frozen program/CSS', async () => adapterFlow(false, false, false, false, 'success'));

@@ -20,7 +20,7 @@ const ref = z.object({ path: z.string().min(1).max(4096), sha256: hash }).strict
 const css = z.string().max(1_048_576).refine(value => !/[<\u0000]/.test(value));
 const section = z.object({ key, sourceUnitIds: ids.min(1), sourceFactIds: ids.min(1), family: z.enum(['content', 'interaction']), dependsOn: z.array(key).max(2000), estimatedEffort: z.number().finite().positive().max(1000000) }).strict();
 const planSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(CURRENT_REPLICA_WORKFLOW_VERSION), kind: z.literal('clonewp-replica-preparation'), taskId: key, runId: key,
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).default(CURRENT_REPLICA_WORKFLOW_VERSION), kind: z.literal('clonewp-replica-preparation'), taskId: key, runId: key,
   title: z.string().trim().min(1).max(200), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,119}$/), sourceUrl: z.url(), targetOrigin: z.url(),
   sourceEvidence: ref, sourceFacts: ref, sourceUnits: ref, headerAssets: ref, bodyAssets: ref,
   bodyBase: native44ProgramSchema.omit({ blocks: true }), headerBase: z.unknown(),
@@ -60,7 +60,9 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every(i
 export function validatePreparationPlan(input: unknown): PreparationPlan {
   try {
     const value = planSchema.parse(clone(input));
-    if (value.version === 1 ? value.responsive !== undefined : !value.responsive || value.responsive.version !== (value.version === 3 ? 2 : 1)) preparationFail('responsive_version_contract');
+    if (value.version === 1 ? value.responsive !== undefined : !value.responsive || value.responsive.version !== (value.version >= 3 ? 2 : 1)) preparationFail('responsive_version_contract');
+    if (value.version === 4 && value.bodyBase.visualAuditVersion !== 3) preparationFail('phone_visual_audit_required');
+    if (value.version === 4 && value.responsive?.decisions?.carousels.some(row => row.presentation !== 'grid') && !value.responsive.carouselMotionSource) preparationFail('phone_carousel_motion_source_required');
     const source = new URL(value.sourceUrl); if (!['http:', 'https:'].includes(source.protocol) || source.username || source.password || /(?:token|nonce|password|secret|authorization|signature)=/i.test(source.search)) preparationFail('source_url');
     const targetOrigin = headerTargetOrigin(value.targetOrigin), headerBase = validateHeaderModulePlan(value.headerBase);
     if (headerBase.targetOrigin !== targetOrigin || headerBase.owner.runId !== value.runId || value.bodyBase.taskId !== value.taskId || value.bodyBase.sourceUrl !== value.sourceUrl || preparationHash(value.bodyBase.sourceFacts) !== preparationHash(value.sourceFacts) || preparationHash(value.bodyBase.assetsManifest) !== preparationHash(value.bodyAssets)) preparationFail('identity');

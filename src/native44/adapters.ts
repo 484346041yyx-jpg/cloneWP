@@ -36,7 +36,9 @@ export function validateNative44Carousel(node:Native44Carousel,schema:LegacySche
 const nonempty=(v:unknown)=>v!==undefined&&v!==''&&v!==false&&v!=='no'&&(!Array.isArray(v)||v.length>0);
 function forbidFilters(settings:Record<string,unknown>,key:string,prefix=''):void{
   for(const field of ['categories','product_cat','taxonomies','exclude','featured','sale','best_selling','stock_status','hide_outofstock','query_id','meta_query','tax_query','offset','paged','pagination','include_term_ids','exclude_ids','exclude_term_ids','related_ids','include','exclude','query_include','query_exclude']){
-    const name=`${prefix}${field}`;if(nonempty(settings[name]))throw new Error(`Undeclared product query filter: ${key}/${name}`);
+    const name=`${prefix}${field}`;
+    if (field === 'pagination' && settings[name] === 'none') continue;
+    if(nonempty(settings[name]))throw new Error(`Undeclared product query filter: ${key}/${name}`);
   }
 }
 function selected(query:Native44Query,catalog:TargetCatalogEvidence,used:Set<number>,key:string):number[]{

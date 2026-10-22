@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readFile, realpath, rename, statfs } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, statfs } from 'node:fs/promises';
 import { z } from 'zod';
 import sharp from 'sharp';
 import { parse } from 'parse5';
@@ -46,7 +46,13 @@ import { assertNativeImageCSS, verifyNativeImageChecks } from './native-image-po
 import { activeVerifiedEvidenceReader, withVerifiedEvidenceReader } from '../core/verified-evidence.js';
 import { validateNative44Program } from '../native44/validate.js';
 import { prepareHeaderMenuContentLocal } from '../woodmart-header/generic/menu-content.js';
+import { verifyFullReplicaVisualReview, verifyFullReplicaPhoneVisualReview } from './visual-review.js';
+import { verifyResponsiveSource } from '../replica-responsive/source.js';
+import { carouselMotionFrameSchema, compareCarouselMotion, verifyPhoneMotionSource } from '../replica-responsive/motion-review.js';
+import { native44ModuleClass } from '../native44/adapters.js';
 import { compileEditorElements } from '../wordpress/editor-serialization.js';
+import { validateRegisteredSettings } from '../planning/plan.js';
+import { applyContainerTreePlan, containerTreePlanSchema, type ContainerTreePlan } from './container-tree.js';
 import { assertRecoveredStyleSettings, assertInterruptedStyleProof, savedStyleSerializationSchemas, type InterruptedStyleProof } from './style-recovery.js';
 import type { FullReplicaManifest, FullReplicaDependencies, FullReplicaPreparedHeader, FullReplicaPreparedBody, FullReplicaPrepared, FullReplicaOperation, FullReplicaHeaderCheckpoint, FullReplicaPageCheckpoint, FullReplicaBodyCheckpoint, FullReplicaBoundCheckpoint, FullReplicaReview, FullReplicaPublishedCheckpoint, FullReplicaFileRef } from './types.js';
 
@@ -210,7 +216,7 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
       if (plan.menuContent) await prepareHeaderMenuContentLocal(plan.menuContent);
       compileHeaderModuleStyles(plan.layout.mobile ? { ...plan.style, css: plan.style.css + '\n' + adaptiveHeaderCSS(plan) } : plan.style, { moduleKey: plan.moduleKey, headerId: 'header_validation' });
       if (plan.layout.mobile) responsiveHeaderPageCSS(plan, 1);
-      const file = await readBound(input.header!.assets, path.dirname(options.manifestPath)), jobDirectory = path.dirname(file.filename), required = [...new Set([...collectMedia(plan.layout), ...(plan.menuItemMedia?.map(binding => binding.mediaKey) ?? [])])], assets = await assetManifest(JSON.parse(file.bytes.toString('utf8')), jobDirectory, required);
+      const file = await readBound(input.header!.assets, path.dirname(options.manifestPath)), jobDirectory = path.dirname(file.filename), required = [...new Set([...collectMedia(plan.layout), ...(plan.menuItemMedia?.map(binding => binding.mediaKey) ?? []), ...(plan.menuContent?.filter(entry=>entry.assetSource==='header-assets').flatMap(entry=>[...referencedNative44Assets(entry.program)])??[])])], assets = await assetManifest(JSON.parse(file.bytes.toString('utf8')), jobDirectory, required);
       const prepared: FullReplicaPreparedHeader = { planHash: modulePlanHash(plan), moduleKey: plan.moduleKey, bundleDirectory: input.header!.bundleDirectory, payload: { manifestHash: fullReplicaHash(manifest), assets, jobDirectory, required, assetsHash: input.header!.assets.sha256 } satisfies PreparedHeaderPayload };
       headerProofs.set(prepared, dataHash(prepared)); return prepared;
     },
@@ -219,7 +225,7 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
     async createPage(prepared, operation) {
       assertPreparedHeader(prepared.header, manifest); assertActualPreparedBody(prepared.body, manifest); const local = await initializeBundle(), services = await remote(), before = await services.full.inspect(local.state.identity);
       if (before.page) fail('page_already_exists_use_reconcile');
-      if (manifest.header!.plan.menuContent) { if (!services.header.prepareMenuContent) fail('menu_content_adapter_required'); await services.header.prepareMenuContent(local.state.identity, manifest.header!.plan.menuContent, local.directory); }
+      if (manifest.header!.plan.menuContent?.every(entry=>entry.assetSource!=='header-assets')) { if (!services.header.prepareMenuContent) fail('menu_content_adapter_required'); await services.header.prepareMenuContent(local.state.identity, manifest.header!.plan.menuContent, local.directory); }
       const result = await fullMutation(services, local.state.identity, before, operation, 'create-page', { title: manifest.title, slug: manifest.slug, headerName: manifest.header!.plan.name, ...(manifest.header!.plan.menuContent ? { menuContent: true } : {}) });
       const page = actualPage(result.snapshot); if (page.elements.length || page.headerId !== null) fail('new_page_not_empty');
       await operationFile(operation, 'create-page-write-confirmed', { fullSnapshot: result.snapshot, result: result.result, nativeOperationId: result.operationId });
@@ -234,7 +240,7 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
       const assets = await importNative44Media({ client: services.client, root: ROOT, runDir: path.join(runDirectory, 'header-media'), jobDir: payload.jobDirectory, runId: manifest.runId, pageId: page.pageId, manifest: payload.assets, required: payload.required });
       const ids = Object.fromEntries(assets.filter(asset => payload.required.includes(asset.key)).map(asset => [asset.key, asset.attachmentId]));
       await withHeaderBundleLock(local.directory, async latest => { if (Object.keys(latest.mediaIds).length && dataHash(latest.mediaIds) !== dataHash(ids)) fail('header_media_changed'); await atomicFile(path.join(latest.directory, 'media.json'), ids); });
-      const results = await provisionHeaderModule(local.directory, services.header); if (results.some(result => !['confirmed', 'unchanged'].includes(result.status))) fail('header_provision_unconfirmed');
+      const results = await provisionHeaderModule(local.directory, services.header, assets); if (results.some(result => !['confirmed', 'unchanged'].includes(result.status))) fail('header_provision_unconfirmed');
       const after = await services.full.inspect(local.state.identity); if (after.header.snapshot.globalHash !== before.header.snapshot.globalHash || actualPage(after, page.pageId).bodyHash !== page.bodyHash) fail('header_boundary_changed');
       const checkpoint = headerCheckpoint(after.header.snapshot.module!, local.state.identity); await operationFile(operation, 'header-confirmed', { fullSnapshot: after, checkpoint }); return checkpoint;
     },
@@ -305,7 +311,7 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
       assertNativeImageCSS(manifest.nativeImagePolicy, prepared.body.payload.program, cssInput);
       const ledgerPath = await checkedPath(path.join(runDirectory, 'body-media', 'assets', 'imported.json')), assets = JSON.parse(await readFile(ledgerPath, 'utf8')) as ImportedAssetV2[];
       if (!Array.isArray(assets)) fail('style_revision_media_ledger'); const css = compileFullPageCSS(manifest.responsive ? prepareResponsiveBody(prepared.body.payload.baseProgram!, manifest.responsive, cssInput).css : cssInput, bound.pageId, assets, manifest.runId) + (manifest.responsive ? responsivePageShellCSS(bound.pageId) + responsiveHeaderPageCSS(manifest.header!.plan, bound.pageId, bound.headerId) : ''), services = await remote(), before = await services.full.inspect(local.state.identity); assertBound(before, bound);
-      if (manifest.editorCompletionPolicy?.runtime && String(before.page!.settings.custom_css ?? '') === css) {
+      if (manifest.editorCompletionPolicy?.runtime && String(before.page!.settings.custom_css ?? '') === css && before.page!.settings.wd__woodmart_whb_header === bound.headerId) {
         if (!local.state.confirmed || before.header.snapshot.globalHash !== (local.state.confirmed.snapshot as { globalHash?: unknown }).globalHash) fail('style_revision_protected_changed');
         await operationFile(operation, 'style-revision-confirmed', { fullSnapshot: before, checkpoint: bound, cssInput: cssRef, contentWrites: 0, unchanged: true });
         return bound;
@@ -313,7 +319,7 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
       await claim(services, bound.pageId);
       for (let offset = 0; offset < assets.length; offset += 100) await services.client.verifyImportedAssets(bound.pageId, assets.slice(offset, offset + 100));
       const result = await fullMutation(services, local.state.identity, before, operation, 'style', { pageId: bound.pageId, css }), page = actualPage(result.snapshot, bound.pageId);
-      if (dataHash(page.elements) !== dataHash(before.page!.elements) || page.headerId !== bound.headerId || digest(String(page.settings.custom_css ?? '')) !== digest(css)) fail('style_revision_readback');
+      if (dataHash(page.elements) !== dataHash(before.page!.elements) || page.headerId !== bound.headerId || page.settings.wd__woodmart_whb_header !== bound.headerId || digest(String(page.settings.custom_css ?? '')) !== digest(css)) fail('style_revision_readback');
       const checkpoint: FullReplicaBoundCheckpoint = { ...bound, bodyHash: page.bodyHash, cssHash: digest(css), documentHash: documentHashV2(page.elements, page.settings) };
       assertBound(result.snapshot, checkpoint); await checkpointHeaderModule(local.directory, services.header, result.snapshot.header.hash); await operationFile(operation, 'style-revision-confirmed', { fullSnapshot: result.snapshot, checkpoint, cssInput: cssRef }); return checkpoint;
     },
@@ -348,10 +354,85 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
       const page = actualPage(result.snapshot, bound.pageId), checkpoint = { ...bound, bodyHash: page.bodyHash, documentHash: documentHashV2(page.elements, page.settings) }; assertBound(result.snapshot, checkpoint);
       await checkpointHeaderModule(local.directory, services.header, result.snapshot.header.hash); await operationFile(operation, 'motion-revision-confirmed', { fullSnapshot: result.snapshot, checkpoint }); return checkpoint;
     },
+    async reviseLayout(prepared, bound, planRef, operation) {
+      assertActualPreparedBody(prepared.body, manifest);
+      const plan = containerTreePlanSchema.parse(JSON.parse((await readBound(planRef)).bytes.toString('utf8'))), local = await bundle(), services = await remote(), before = await services.full.inspect(local.state.identity);
+      assertBound(before, bound);
+      const capabilities = await claim(services, bound.pageId, prepared.body), registered = capabilities.legacySchemas.container?.controls;
+      if (!registered || plan.operations.some(change => Object.keys(change.controls).some(control => !registered[control]))) fail('layout_registered_controls_missing');
+      for (const change of plan.operations) validateRegisteredSettings('container', change.controls, capabilities.legacySchemas.container, { onlyControls: new Set(Object.keys(change.controls)), allowedMedia: [] });
+      const elements = applyContainerTreePlan(before.page!.elements, plan);
+      await operationFile(operation, 'layout-patch', { version: 1, kind: 'clonewp-full-layout-patch', before, bound, plan: planRef, elementsHash: dataHash(elements) });
+      const result = await fullMutation(services, local.state.identity, before, operation, 'layout', { pageId: bound.pageId, plan }), page = actualPage(result.snapshot, bound.pageId);
+      if (dataHash(page.elements) !== dataHash(elements) || dataHash(page.settings) !== dataHash(before.page!.settings) || page.headerId !== bound.headerId) fail('layout_revision_readback');
+      const checkpoint = { ...bound, bodyHash: page.bodyHash, documentHash: documentHashV2(page.elements, page.settings) }; assertBound(result.snapshot, checkpoint);
+      await checkpointHeaderModule(local.directory, services.header, result.snapshot.header.hash); await operationFile(operation, 'layout-revision-confirmed', { fullSnapshot: result.snapshot, checkpoint }); return checkpoint;
+    },
+    async rebaseCurrentDraft(bound, operation, currentBodyHash, currentDocumentHash) {
+      const local = await bundle(), directory = await checkedPath(path.join(runDirectory, 'operations'));
+      if (local.state.pending || operation.phase !== 'layout-revision') fail('rebase_local_state_changed');
+      const names = await readdir(directory);
+      const existing = names.filter(name => name.startsWith(`${operation.operationId}-`));
+      if (existing.some(name => !name.includes('-current-draft-rebase-confirmed-')) || existing.length > 1) fail('rebase_operation_started');
+      const services = await remote(), current = await services.full.inspect(local.state.identity);
+      const page = actualPage(current, bound.pageId), adopted = { ...bound, bodyHash: currentBodyHash, documentHash: currentDocumentHash };
+      if (page.bodyHash !== currentBodyHash || documentHashV2(page.elements, page.settings) !== currentDocumentHash || page.title !== manifest.title || page.slug !== manifest.slug || current.receipts[operation.operationId]) fail('rebase_current_state_changed');
+      assertBound(current, adopted);
+      let prior: FullReplicaRemoteSnapshot | undefined;
+      for (const name of names.filter(entry => /-(?:style|layout|motion)-revision-confirmed-.*\.json$/.test(entry))) {
+        const record = JSON.parse(await readFile(await checkedPath(path.join(directory, name)), 'utf8'));
+        if (record.kind === 'clonewp-full-replica-operation' && record.operation?.taskId === manifest.taskId && record.operation?.runId === manifest.runId && dataHash(record.value?.checkpoint) === dataHash(bound)) { prior = record.value.fullSnapshot; break; }
+      }
+      if (!prior?.page || !prior.header || prior.page.bodyHash !== bound.bodyHash || dataHash(prior.receipts) !== dataHash(current.receipts) || prior.header.snapshot.globalHash !== current.header.snapshot.globalHash) fail('rebase_prior_proof_missing');
+      const { bodyHash: _beforeBodyHash, elements: _beforeElements, settings: _beforeSettings, ...beforePage } = prior.page;
+      const { bodyHash: _currentBodyHash, elements: _currentElements, settings: _currentSettings, ...currentPage } = page;
+      if (dataHash(beforePage) !== dataHash(currentPage)) fail('rebase_page_changed');
+      const elementShape = (elements: typeof page.elements): unknown => elements.map(element => ({ id: element.id, elType: element.elType, widgetType: element.widgetType ?? null, children: elementShape(element.elements ?? []) }));
+      if (dataHash(elementShape(prior.page.elements)) !== dataHash(elementShape(page.elements))) fail('rebase_element_structure_changed');
+      const withoutOwnedPage = (snapshot: FullReplicaRemoteSnapshot) => {
+        const header = structuredClone(snapshot.header), pages = header.snapshot.module!.pages;
+        delete pages[String(bound.pageId)];
+        delete (header as { hash?: string }).hash;
+        return header;
+      };
+      if (dataHash(withoutOwnedPage(prior)) !== dataHash(withoutOwnedPage(current))) fail('rebase_header_changed');
+      if (!local.state.confirmed || ![prior.header.hash, current.header.hash].includes(local.state.confirmed.hash)) fail('rebase_local_header_changed');
+      const expectedHeader = local.state.confirmed.hash === prior.header.hash ? prior.header.snapshot : current.header.snapshot;
+      if (dataHash(local.state.confirmed.snapshot) !== dataHash(expectedHeader)) fail('rebase_local_header_changed');
+      const fresh = await services.full.inspect(local.state.identity);
+      if (fresh.hash !== current.hash) fail('rebase_readback_changed');
+      await checkpointHeaderModule(local.directory, services.header, current.header.hash);
+      if (existing.length) {
+        const proof = JSON.parse(await readFile(await checkedPath(path.join(directory, existing[0])), 'utf8'));
+        if (proof.kind !== 'clonewp-full-replica-operation' || dataHash(proof.operation) !== dataHash(operation) || proof.value?.currentSnapshot?.hash !== current.hash || dataHash(proof.value?.adopted) !== dataHash(adopted)) fail('rebase_proof_changed');
+      } else await operationFile(operation, 'current-draft-rebase-confirmed', { priorSnapshotHash: prior.hash, currentSnapshot: current, before: bound, adopted, remoteWrites: 0 });
+      return adopted;
+    },
     async reconcileOperation(_prepared, operation, checkpoints) {
+      if (operation.phase === 'page' && !Object.keys(checkpoints).length) {
+        const local = await bundle();
+        if (!local.state.pending && !local.state.confirmed) {
+          const { readdir } = await import('node:fs/promises');
+          let entries: string[];
+          try { entries = await readdir(await checkedPath(path.join(runDirectory, 'operations'))); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; entries = []; }
+          if (!entries.length) return { status: 'before' };
+        }
+      }
       if (operation.phase === 'header-style-revision') {
         let local = await loadHeaderBundle(manifest.header!.bundleDirectory); const services = await remote(), completed = await confirmedHeaderStyleResult(manifest, runDirectory, local, operation.operationId);
         if (completed) { const current = await services.full.inspect(local.state.identity); assertBound(current, completed.bound); return { status: 'after', checkpoint: completed }; }
+        // A failure before beginHeaderStyle has no intent and cannot have sent a
+        // remote mutation. Recheck both local and remote state before clearing it.
+        try { await lstat(path.join(runDirectory, 'header-amendments', `${operation.operationId}-intent.json`)); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          if (local.state.pending || !checkpoints.bound) return { status: 'conflict' };
+          await assertEffectiveHeaderPlan(manifest, runDirectory, local);
+          const current = await services.full.inspect(local.state.identity);
+          assertBound(current, checkpoints.bound);
+          return { status: 'before' };
+        }
         const amendment = await readPendingHeaderStyle(manifest, runDirectory, local, operation), beforeFile = await readBound(amendment.intent.beforeSnapshot), before = JSON.parse(beforeFile.bytes.toString('utf8')) as FullReplicaRemoteSnapshot;
         if (!checkpoints.bound || fullReplicaFingerprint(checkpoints.bound) !== fullReplicaFingerprint(amendment.intent.before.bound)) fail('header_style_reconcile_stale');
         if (local.state.pending) { const reconciled = await reconcileHeaderModule(local.directory, services.header); if (reconciled.status === 'conflict') return { status: 'conflict' }; local = await loadHeaderBundle(local.directory); }
@@ -366,6 +447,12 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
       if(operation.phase==='style-revision'&&checkpoints.bound&&!local.state.pending){
         const {readdir}=await import('node:fs/promises'),directory=await checkedPath(path.join(runDirectory,'operations')),names=await readdir(directory),prefix=`${operation.operationId}-style-`;
         const files=names.filter(n=>n.startsWith(prefix)&&/^[a-f0-9-]{36}\.json$/.test(n.slice(prefix.length)));
+        if (!files.length && !names.some(name => name.startsWith(`${operation.operationId}-`)) && local.state.confirmed?.hash === current.header.hash && dataHash(local.state.confirmed.snapshot) === dataHash(current.header.snapshot)) {
+          for (const name of names.filter(entry => entry.includes('-confirmed-') && entry.endsWith('.json'))) {
+            const prior = JSON.parse(await readFile(await checkedPath(path.join(directory, name)), 'utf8'));
+            if (prior.kind === 'clonewp-full-replica-operation' && prior.operation?.taskId === manifest.taskId && prior.operation?.runId === manifest.runId && prior.value?.fullSnapshot?.hash === current.hash && dataHash(prior.value?.checkpoint) === dataHash(checkpoints.bound)) { assertBound(current, checkpoints.bound); return { status: 'before' }; }
+          }
+        }
         if(files.length===1){
           const record=JSON.parse(await readFile(await checkedPath(path.join(directory,files[0])),'utf8')),intent=record.value;
           if(record.version!==1||record.kind!=='clonewp-full-replica-operation'||dataHash(record.operation)!==dataHash(operation)||intent?.action!=='style'||dataHash(intent.identity)!==dataHash(local.state.identity)||intent.payload?.pageId!==checkpoints.bound.pageId||typeof intent.payload.css!=='string'||Object.keys(intent.payload).sort().join(',')!=='css,pageId'||intent.payloadHash!==fullReplicaHash(intent.payload)||intent.protectedHash!==current.header.snapshot.globalHash)return{status:'conflict'};
@@ -418,7 +505,7 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
           const createdFiles=names.filter(n=>n.includes('-create-page-write-confirmed-'));if(createdFiles.length!==1)fail('style_recovery_original_page_proof_missing');const created=JSON.parse(await readFile(await checkedPath(path.join(directory,createdFiles[0])),'utf8'));
           if(created.operation.taskId!==manifest.taskId||created.operation.runId!==manifest.runId||created.operation.phase!=='page'||created.value.fullSnapshot.page.pageId!==page.pageId)fail('style_recovery_original_page_proof_changed');
           const {[style.operationId]:_r,...otherReceipts}=current.receipts;if(dataHash(otherReceipts)!==dataHash(created.value.fullSnapshot.receipts))fail('style_recovery_other_receipts_changed');
-          const diagnostic=await services.full.styleDiagnostics(local.state.identity),baseline={...created.value.fullSnapshot.page.settings,...compiled.composition.pageSettings,custom_css:css};assertRecoveredStyleSettings(baseline,page.settings,diagnostic.defaults);
+          const diagnostic=await services.full.styleDiagnostics(local.state.identity),baseline={...created.value.fullSnapshot.page.settings,...compiled.composition.pageSettings,custom_css:css,wd__woodmart_whb_header:local.state.identity.headerId};assertRecoveredStyleSettings(baseline,page.settings,diagnostic.defaults);
           let after=current;
           if(receipt.state==='started'){
             const fatal=diagnostic.fatal.filter(f=>Date.parse(f.at)>=Date.parse(operation.createdAt)).at(-1);if(!fatal)fail('style_recovery_fatal_unproven');
@@ -514,7 +601,7 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
       if (operation.phase === 'motion-revision') {
         if (!checkpoints.bound || local.state.pending) return { status: 'conflict' };
         const { readdir } = await import('node:fs/promises'), directory = await checkedPath(path.join(runDirectory, 'operations')), names = await readdir(directory);
-        const readProof = async (label: string) => { const files = names.filter(name => name.startsWith(`${operation.operationId}-${label}-`) && name.endsWith('.json')); if (files.length !== 1) return null; const record = JSON.parse(await readFile(await checkedPath(path.join(directory, files[0])), 'utf8')); return dataHash(record.operation) === dataHash(operation) ? record.value : null; };
+        const readProof = async (label: string) => { const prefix = `${operation.operationId}-${label}-`; const files = names.filter(name => name.startsWith(prefix) && /^[a-f0-9-]{36}\.json$/.test(name.slice(prefix.length))); if (files.length !== 1) return null; const record = JSON.parse(await readFile(await checkedPath(path.join(directory, files[0])), 'utf8')); return dataHash(record.operation) === dataHash(operation) ? record.value : null; };
         const proof = await readProof('native-motion-patch') as { version: number; kind: string; before: FullReplicaRemoteSnapshot; bound: FullReplicaBoundCheckpoint; patch: NativeMotionPatch } | null, intent = await readProof('motion') as { operationId: string; action: string; beforeHash: string; protectedHash: string; payload: { pageId: number }; payloadHash: string } | null;
         if (!proof || !intent || proof.version !== 1 || proof.kind !== 'clonewp-full-native-motion-patch' || intent.action !== 'motion' || intent.beforeHash !== proof.before.hash || intent.protectedHash !== proof.before.header.snapshot.globalHash || intent.payload.pageId !== checkpoints.bound.pageId || intent.payloadHash !== fullReplicaHash({ pageId: checkpoints.bound.pageId }) || fullReplicaFingerprint(proof.bound) !== fullReplicaFingerprint(checkpoints.bound) || dataHash(patchNativeCarouselMotion(proof.before.page!.elements)) !== dataHash(proof.patch)) return { status: 'conflict' };
         assertBound(proof.before, proof.bound);
@@ -524,6 +611,24 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
         try { assertNativeMotionBoundary(proof.before, current, proof.patch); } catch { return { status: 'conflict' }; }
         const { [intent.operationId]: _receipt, ...priorReceipts } = current.receipts; if (dataHash(priorReceipts) !== dataHash(proof.before.receipts)) return { status: 'conflict' };
         const page = actualPage(current, proof.bound.pageId), checkpoint = { ...proof.bound, bodyHash: page.bodyHash, documentHash: documentHashV2(page.elements, page.settings) }; assertBound(current, checkpoint);
+        await checkpointHeaderModule(local.directory, services.header, current.header.hash); return { status: 'after', checkpoint };
+      }
+      if (operation.phase === 'layout-revision') {
+        if (!checkpoints.bound || local.state.pending) return { status: 'conflict' };
+        const { readdir } = await import('node:fs/promises'), directory = await checkedPath(path.join(runDirectory, 'operations')), names = await readdir(directory);
+        const readProof = async (label: string) => { const prefix = `${operation.operationId}-${label}-`; const files = names.filter(name => name.startsWith(prefix) && /^[a-f0-9-]{36}\.json$/.test(name.slice(prefix.length))); if (files.length !== 1) return null; const record = JSON.parse(await readFile(await checkedPath(path.join(directory, files[0])), 'utf8')); return dataHash(record.operation) === dataHash(operation) ? record.value : null; };
+        const proof = await readProof('layout-patch') as { version: number; kind: string; before: FullReplicaRemoteSnapshot; bound: FullReplicaBoundCheckpoint; plan: FullReplicaFileRef; elementsHash: string } | null;
+        const intent = await readProof('layout') as { operationId: string; action: string; beforeHash: string; protectedHash: string; payload: { pageId: number; plan: ContainerTreePlan }; payloadHash: string } | null;
+        if (!proof || !intent || proof.version !== 1 || proof.kind !== 'clonewp-full-layout-patch' || intent.action !== 'layout' || intent.beforeHash !== proof.before.hash || intent.protectedHash !== proof.before.header.snapshot.globalHash || intent.payload.pageId !== checkpoints.bound.pageId || intent.payloadHash !== fullReplicaHash(intent.payload) || fullReplicaFingerprint(proof.bound) !== fullReplicaFingerprint(checkpoints.bound)) return { status: 'conflict' };
+        const plan = containerTreePlanSchema.parse(JSON.parse((await readBound(proof.plan)).bytes.toString('utf8')));
+        if (dataHash(plan) !== dataHash(intent.payload.plan) || dataHash(applyContainerTreePlan(proof.before.page!.elements, plan)) !== proof.elementsHash) return { status: 'conflict' };
+        assertBound(proof.before, proof.bound);
+        if (current.hash === proof.before.hash && local.state.confirmed?.hash === current.header.hash && dataHash(local.state.confirmed.snapshot) === dataHash(current.header.snapshot) && !current.receipts[intent.operationId]) return { status: 'before' };
+        const receipt = current.receipts[intent.operationId]; if (receipt?.state !== 'complete' || receipt.action !== 'layout' || receipt.payloadHash !== intent.payloadHash || receipt.result?.pageId !== checkpoints.bound.pageId) return { status: 'conflict' };
+        const page = actualPage(current, checkpoints.bound.pageId);
+        if (dataHash(page.elements) !== proof.elementsHash || dataHash(page.settings) !== dataHash(proof.before.page!.settings) || current.header.snapshot.globalHash !== proof.before.header.snapshot.globalHash) return { status: 'conflict' };
+        const { [intent.operationId]: _receipt, ...priorReceipts } = current.receipts; if (dataHash(priorReceipts) !== dataHash(proof.before.receipts)) return { status: 'conflict' };
+        const checkpoint = { ...proof.bound, bodyHash: page.bodyHash, documentHash: documentHashV2(page.elements, page.settings) }; assertBound(current, checkpoint);
         await checkpointHeaderModule(local.directory, services.header, current.header.hash); return { status: 'after', checkpoint };
       }
       if (operation.phase === 'binding' && current.page?.headerId === null) {
@@ -552,13 +657,21 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
 }
 
 const browserDOM = z.object({ version: z.literal(1), kind: z.literal('clonewp-full-replica-browser-dom'), pageId: z.number().int().positive(), url: z.url(), observedAt: z.string(), viewport: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(), html: z.string().min(1).max(12 * 1024 * 1024) }).strict();
-const interactionState = z.object({ version: z.literal(1), kind: z.literal('clonewp-full-replica-interaction-state'), pageId: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), width: z.number().int().positive(), height: z.number().int().positive(), selector: z.string().min(1), observedAt: z.string(), state: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.null()])), screenshot: fileRef.optional() }).strict();
+const interactionState = z.object({ version: z.literal(1), kind: z.literal('clonewp-full-replica-interaction-state'), pageId: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), width: z.number().int().positive(), height: z.number().int().positive(), selector: z.string().min(1), observedAt: z.string(), state: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.null()])), motion: carouselMotionFrameSchema.optional(), screenshot: fileRef.optional() }).strict();
 /** Evidence is deliberately independent from a caller's pass/count booleans. */
 export async function verifyFullReplicaReviewEvidence(review: FullReplicaReview, bound: FullReplicaBoundCheckpoint, manifest: FullReplicaManifest, currentElements?: unknown[]): Promise<void> {
   return withVerifiedEvidenceReader(ROOT, async reader => {
   if (!Number.isFinite(Date.parse(review.observedAt)) || Math.abs(Date.now() - Date.parse(review.observedAt)) > 60 * 60 * 1000) fail('review_not_current');
   const file = await readBound(review.reviewerEvidence), evidence = JSON.parse(file.bytes.toString('utf8'));
   if (evidence.version !== 1 || evidence.kind !== 'clonewp-full-replica-review-evidence' || evidence.taskId !== manifest.taskId || evidence.runId !== manifest.runId || evidence.pageId !== bound.pageId || evidence.fingerprint !== fullReplicaFingerprint(bound) || !Array.isArray(evidence.viewports) || evidence.viewports.length !== requiredReplicaViewports(manifest.responsive).length) fail('review_evidence_identity');
+  const visualProgramFile = await readBound(manifest.body.program), visualProgramRaw = JSON.parse(visualProgramFile.bytes.toString('utf8'));
+  const visualAuditRequired = review.decision === 'approved' && [1, 2, 3].includes(visualProgramRaw?.visualAuditVersion);
+  if (manifest.version === 4 && visualProgramRaw?.visualAuditVersion !== 3) fail('review_phone_visual_audit_required');
+  const visualProgram = visualAuditRequired ? validateNative44Program(visualProgramRaw) : null;
+  const phonePackets = manifest.version === 4 && review.decision === 'approved' && manifest.responsive
+    ? await verifyResponsiveSource(manifest.responsive, manifest, readBound) : [];
+  const motionRows = manifest.version === 4 && review.decision === 'approved' && manifest.responsive && visualProgram
+    ? await verifyPhoneMotionSource({ taskId: manifest.taskId, sourceUrl: manifest.sourceUrl, plan: manifest.responsive, program: visualProgram, packets: phonePackets, read: readBound }) : [];
   const responsiveDOM = new Map<string, string>();
   if (manifest.nativeImagePolicy && review.decision === 'approved') {
     const programFile = await readBound(manifest.body.program), base = validateNative44Program(JSON.parse(programFile.bytes.toString('utf8')));
@@ -571,6 +684,15 @@ export async function verifyFullReplicaReviewEvidence(review: FullReplicaReview,
     if (!nativeViewportRasterMapping(metadata,view,row.captureMode)) fail('review_raster_dimensions');
     const raw = await readBound(row.dom, path.dirname(file.filename)), dom = browserDOM.parse(JSON.parse(raw.bytes.toString('utf8'))), url = new URL(dom.url);
     if (dom.pageId !== bound.pageId || dom.viewport.width !== view.width || dom.viewport.height !== view.height || url.origin !== manifest.targetOrigin || url.username || url.password || /(?:token|nonce|password|secret|authorization)=/i.test(url.search) || !Number.isFinite(Date.parse(dom.observedAt)) || Date.parse(dom.observedAt) > Date.parse(review.observedAt) || Date.parse(review.observedAt) - Date.parse(dom.observedAt) > 60 * 60 * 1000) fail('review_dom_identity');
+    if (visualAuditRequired && view.width >= 1024) {
+      if (!row.visualAudit) fail('review_visual_audit_missing');
+      await verifyFullReplicaVisualReview({ manifest, bound, review, width: view.width, height: view.height, screenshotSha256: view.screenshot.sha256, reference: row.visualAudit, reviewDirectory: path.dirname(file.filename), targetHtml: dom.html, read: readBound });
+    } else if (manifest.version === 4 && visualAuditRequired) {
+      if (!row.visualAudit) fail('review_phone_visual_audit_missing');
+      const phoneView = evidence.responsive?.views?.find((item: { width: number; height: number }) => item.width === view.width && item.height === view.height);
+      if (!phoneView || !Number.isInteger(phoneView.clientWidth)) fail('review_phone_client_width_missing');
+      await verifyFullReplicaPhoneVisualReview({ manifest, bound, review, width: view.width, height: view.height, clientWidth: phoneView.clientWidth, screenshotSha256: view.screenshot.sha256, reference: row.visualAudit, reviewDirectory: path.dirname(file.filename), targetHtml: dom.html, read: readBound, packets: phonePackets });
+    }
     responsiveDOM.set(`${view.width}x${view.height}`, dom.html);
     let headerCount = 0, bodyHeaderCount = 0, roots = 0; const activeForms: any[] = [];
     const walk = (node: any, inBody = false, inInert = false) => { const attrs = Object.fromEntries((node.attrs ?? []).map((attr: { name: string; value: string }) => [attr.name, attr.value])), classes = String(attrs.class ?? '').split(/\s+/), bodyRoot = attrs['data-elementor-id'] === String(bound.pageId) && classes.includes(`elementor-${bound.pageId}`), body = inBody || bodyRoot, inert = inInert || Object.hasOwn(attrs, 'inert'); if (bodyRoot) roots++; if (classes.includes(`whb-${bound.headerId}`)) headerCount++; if (body && (node.tagName === 'header' || String(attrs.role).toLowerCase() === 'banner' || classes.includes('whb-header'))) bodyHeaderCount++; if (body && node.tagName === 'form' && !inert) activeForms.push(node); for (const child of node.childNodes ?? []) walk(child, body, inert); };
@@ -582,6 +704,10 @@ export async function verifyFullReplicaReviewEvidence(review: FullReplicaReview,
     if (manifest.responsive && view.width <= manifest.responsive.mobileMaxWidth) {
       const required = ['mobile-menu-open', 'mobile-menu-close', ...(manifest.header!.plan.menus.some(m => m.items.some(i => i.parentKey !== null)) ? ['mobile-submenu'] : [])];
       if (required.some(key => !interactions.actions.some((a: any) => a.key === key && a.kind === 'navigation' && a.expectedOutcome === 'changed'))) fail('review_mobile_menu_missing');
+      for (const motion of motionRows.filter(item => item.width === view.width && item.height === view.height)) {
+        const selector = `.elementor-${bound.pageId} .${native44ModuleClass(motion.componentKey)}`;
+        if (interactions.actions.filter((a: any) => a.key === `carousel-motion:${motion.componentKey}` && a.kind === 'carousel' && a.selector === selector && a.expectedOutcome === 'changed').length !== 1) fail(`review_carousel_motion_missing:${motion.componentKey}`);
+      }
     }
     for (const action of interactions.actions) {
       if (typeof action.key !== 'string' || !['navigation', 'hover', 'carousel', 'form', 'link'].includes(action.kind) || typeof action.selector !== 'string' || !action.selector.trim() || typeof action.summary !== 'string' || action.summary.trim().length < 10 || !['changed', 'inert', 'navigated'].includes(action.expectedOutcome)) fail('review_interaction_action');
@@ -597,6 +723,12 @@ export async function verifyFullReplicaReviewEvidence(review: FullReplicaReview,
         if (states[0].state.expanded !== closing || states[1].state.expanded !== !closing) fail('review_mobile_menu_state');
       }
       if (action.expectedOutcome === 'inert' && (states[1].state.inert !== true || states[1].state.submissionRequests !== 0)) fail('review_pending_form_submission_unproven');
+      const motion = motionRows.find(item => item.width === view.width && item.height === view.height && action.key === `carousel-motion:${item.componentKey}`);
+      if (motion) {
+        if (action.kind !== 'carousel' || action.selector !== `.elementor-${bound.pageId} .${native44ModuleClass(motion.componentKey)}` || !states[0].screenshot || !states[1].screenshot || !states[0].motion || !states[1].motion) fail('review_carousel_motion_evidence');
+        const differences = compareCarouselMotion(motion.before, motion.after, states[0].motion, states[1].motion);
+        if (differences.length) fail(`review_carousel_motion_mismatch:${motion.componentKey}:${differences.join(',')}`);
+      }
       const navigationForm = manifest.body.navigationForms?.find(form => action.selector === navigationFormSelector(form, manifest.taskId));
       if (navigationForm) assertNavigationFormInteraction(navigationForm, action, states, manifest.sourceUrl, manifest.targetOrigin, manifest.taskId);
     }

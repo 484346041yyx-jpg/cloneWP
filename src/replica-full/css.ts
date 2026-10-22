@@ -43,5 +43,5 @@ export function compileFullPageCSS(input:string,pageId:number,assets:ImportedAss
  });
  // Full Width templates can still inherit WoodMart's negative-gap container.
  // The fixed rule targets only this owned page's theme content shell.
- return `body.page-id-${pageId} #main-content.wd-content-layout{width:100%;max-width:none;margin:0;padding:0}`+css.generate(ast!);
+ return `body.page-id-${pageId}{margin-left:0!important}body.page-id-${pageId} .wd-sticky-nav{display:none!important}body.page-id-${pageId} #main-content.wd-content-layout{width:100%;max-width:none;margin:0;padding:0}@media(max-width:768px){body.page-id-${pageId} .wd-fs-menu .wd-dropdown-fs-menu,body.page-id-${pageId} .wd-fs-menu .wd-dropdown-fs-menu>.container,body.page-id-${pageId} .wd-fs-menu .wd-dropdown-fs-menu>.container>.wd-sub-menu{width:100%!important;max-width:100%!important}}`+css.generate(ast!);
 }

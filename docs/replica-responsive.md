@@ -1,10 +1,12 @@
 # 同一复刻流程的桌面与手机能力
 
-新任务继续使用 `create:replica` → preparation → full → review → publish，同一份 v3 合同覆盖桌面和手机，并在生成前冻结手机决定。实现集中在 `src/replica-responsive/`，既有调度、原生正文编译、页眉资源保护与串行写入继续使用。没有第二个入口、第二套复刻流程或另一项项目技能。显式旧 v1/v2 合同仍按其冻结范围读取，不能自动改造已完成页面。
+新任务继续使用 `create:replica` → preparation → full → review → publish，同一份 v4 合同覆盖桌面和手机，并在生成前冻结手机决定。实现集中在 `src/replica-responsive/`，既有调度、原生正文编译、页眉资源保护与串行写入继续使用。没有第二个入口、第二套复刻流程或另一项项目技能。显式旧 v1/v2 合同仍按其冻结范围读取，不能自动改造已完成页面。
 
 ## 默认与共同准备
 
-新 preparation/full 合同使用 `version:3`；省略版本时解析默认是3，要求 `responsive.version:2` 及完整的生成前决定，缺失会在写入前报错。显式 v1 保留桌面历史兼容，显式 v2 保留原 `responsive.version:1` 的手机合同。当前默认手机宽度为390×844、430×932，桌面仍为1920×1080、1440×1000。手机宽度可以在合同内改为另外两个320–767范围的真实观察尺寸；平板只沿用桌面并检查900×900，不建立第三份来源设计。
+新 preparation/full 合同使用 `version:4`；省略版本时解析默认是4，要求 `bodyBase.visualAuditVersion:3`、`responsive.version:2` 及完整的生成前决定，缺失会在写入前报错。显式 v1/v2/v3 继续按各自冻结合同执行。当前默认手机宽度为390×844、430×932，桌面仍为1920×1080、1440×1000。手机宽度可以在合同内改为另外两个320–767范围的真实观察尺寸；平板只沿用桌面并检查900×900，不建立第三份来源设计。
+
+v4 还要求两手机宽度的逐区视觉报告。记录来源与目标的标称视口、实际 `clientWidth` 和截图模式，在同一字体加载后的稳定状态采样；文字记录实际框高、行数与 `white-space`。如有轮播，`responsive.carouselMotionSource` 绑定来源滑动前后截图及卡片位置，目标审核须有相同组件的前后交互状态，核对原生滑动步长与卡片间距。完整字段和版本边界见 [复刻视觉证据检查](replica-visual-audit.md)。
 
 preparation 的 `responsive` 包含 `version:2`、`tablet:desktop`、实际 `mobileMaxWidth`、两个实际 `viewports`、带文件哈希的 `source` 引用及 `decisions`。例如当前测试站断点是768，手机视口是390×844与430×932；这些是本次目标配置，不能当作来源站的业务事实。
 
@@ -42,7 +44,7 @@ source 文件是 `version:1, kind:clonewp-responsive-source, taskId, sourceUrl, 
 
 来源若在开菜单时收起 Logo，view 须显式冻结 `menuOpenLogo:hidden`、`menuOpenHeight`，并由来源交互详情中的真实 menuOpenLogoVisible、menuOpenHeight 证明；只有该具名状态允许零 Logo 矩形，实际页眉高度和菜单矩形仍校验，其余状态保持完整页眉约束。
 
-v3 header plan 的 `layout.mobile` 保存 `version:2, tablet:desktop, mobileMaxWidth:实际手机断点, rows, css, scroll`，其中 `scroll` 必须与 `responsive.decisions.header` 完全相同，不能由页眉准备组另写一份不同决定。历史手机合同的 `layout.mobile.version:1` 保持原义。rows 的 slot/columns/element形状与原桌面相同，元素键须独立；行参数仅接受原生 `mobile_height`，共享行颜色等通过手机限域CSS补足，避免手机行设置反向修改桌面。结构仍保存在同一 WHB 对象，用户可在 Header Builder 的 Mobile 标签编辑。
+v3/v4 header plan 的 `layout.mobile` 保存 `version:2, tablet:desktop, mobileMaxWidth:实际手机断点, rows, css, scroll`，其中 `scroll` 必须与 `responsive.decisions.header` 完全相同，不能由页眉准备组另写一份不同决定。历史手机合同的 `layout.mobile.version:1` 保持原义。rows 的 slot/columns/element形状与原桌面相同，元素键须独立；行参数仅接受原生 `mobile_height`，共享行颜色等通过手机限域CSS补足，避免手机行设置反向修改桌面。结构仍保存在同一 WHB 对象，用户可在 Header Builder 的 Mobile 标签编辑。
 
 手机导航采用任务自有菜单绑定的原生 `mainmenu` 全屏图标样式（`full_screen:true,style:icon`），先确认实际菜单参数/渲染和交互，再补CSS。不使用全站 Mobile Side Menu 位置，不修改 `nav_menu_locations`。当前原生全屏菜单按最后一个mainmenu汇总参数，因此编译必须确认最后一项正是手机自己的菜单；后续桌面菜单覆盖它时在保存前报错，按原生行列顺序重新规划。菜单内容一致可以复用本任务菜单；结构不同在同一计划中新建另一份有真实名称的任务菜单。
 
@@ -60,7 +62,7 @@ v3 的检查以生成前冻结的来源决定为准，附加两手机宽度各�
 
 v3 review evidence 的 `responsive` 是 `clonewp-responsive-review` v2，新增 `decisionEvidence` 的4个引用，分别覆盖两个手机宽度的前台和编辑器；历史workflow v2继续使用review v1。它绑定 taskId/runId/pageId/fingerprint，`views` 覆盖同四个尺寸；每项记录 `width,height,clientWidth,scrollWidth,observedAt,sections,header`。sections逐区记录桌面/手机容器实际 `id,display,width,height`；header记录同一header ID及其桌面、手机列实际矩形，确保任一宽度仅一套可见。`tablet` 用同一形状追加900×900的 screenshot/dom哈希引用，只检查桌面继承和溢出。记录来自当前浏览器读回，不填造通过布尔值。
 
-最终继续交付页面、页眉与所有菜单真实名称、ID、链接、独立布局/样式位置和实际验证范围。历史合同不借新规则冒称新增项目已验证。模块代码位于 `src/replica-responsive/`；layout.mobile位于任务页眉bundle的header.json，手机正文计划与决定位于任务不可变v3合同；源码模块独立维护，执行仍是同一流程。
+最终继续交付页面、页眉与所有菜单真实名称、ID、链接、独立布局/样式位置和实际验证范围。历史合同不借新规则冒称新增项目已验证。模块代码位于 `src/replica-responsive/`；layout.mobile位于任务页眉bundle的header.json，手机正文计划与决定位于任务不可变v4合同；源码模块独立维护，执行仍是同一流程。
 
 来源局部静态分支可由 section.visibility 显式声明 componentKey 和 hideOn（仅 mobile 或 desktop+tablet 两种互补设备集）。目标必须是该节内独立 Container，子树只允许静态内容、媒体及原生折叠；不能藏商品/文章查询、表单、动态轮播或HTML。基础program不得自行填写hide_*，适配层统一注入原生字段并核对实际注册。phone-only 模式用于来源真实仅手机显示的整节，桌面和平板原生隐藏、手机保留；最终四视口验收按这个模式核对。
 

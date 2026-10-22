@@ -11,11 +11,20 @@ const state = z.object({
     rect: z.object({ x: z.number().finite(), y: z.number().finite(), width: z.number().finite(), height: z.number().finite() }).strict(),
     currentSrc: z.string().nullable(), styles: z.record(z.string(), z.record(z.string(), z.string())) }).strict()).min(1).max(31),
 }).strict();
+const unreachableProbe = z.object({
+  version: z.literal(1), kind: z.literal('source-hover-unreachable'), sourceUrl: z.url(), observedAt: z.iso.datetime(),
+  screenshotHash: hash, triggerSelector: z.string().min(1),
+  triggerRect: z.object({ x: z.number().finite(), y: z.number().finite(), width: z.number().finite().positive(), height: z.number().finite().positive() }).strict(),
+  pointerEvents: z.string(), hits: z.array(z.object({ x: z.number().finite(), y: z.number().finite(), hitSelector: z.string().nullable(), targetOrDescendant: z.boolean() }).strict()).length(9),
+}).strict();
+const rowIdentity = { snapshotId: z.string().min(1), triggerNodeId: z.string().min(1) };
+const capture = z.object({ state, screenshot: ref }).strict();
 export const SourceHoverReviewSchema = z.object({
   version: z.literal(1), kind: z.literal('source-hover-review'), sourceUrl: z.url(),
-  rows: z.array(z.object({ snapshotId: z.string().min(1), triggerNodeId: z.string().min(1),
-    captures: z.tuple([z.object({ state, screenshot: ref }).strict(), z.object({ state, screenshot: ref }).strict(), z.object({ state, screenshot: ref }).strict()]),
-  }).strict()).max(1500),
+  rows: z.array(z.union([
+    z.object({ ...rowIdentity, captures: z.tuple([capture, capture, capture]) }).strict(),
+    z.object({ ...rowIdentity, unreachable: z.object({ probe: unreachableProbe, screenshot: ref, activation: z.object({ kind: z.enum(['carousel-tab', 'other']), label: z.string().min(1) }).strict() }).strict() }).strict(),
+  ])).max(1500),
 }).strict();
 export type SourceHoverReview = z.infer<typeof SourceHoverReviewSchema>;
 
@@ -32,6 +41,11 @@ export function verifySourceHoverReview(facts: SourceFactsV2, input: unknown): S
     const key = `${row.snapshotId}\0${row.triggerNodeId}`, fact = expected.get(key), snapshot = facts.snapshots.find(item => item.id === row.snapshotId);
     if (!fact || !snapshot || seen.has(key)) throw Error('source_hover_identity_conflict'); seen.add(key);
     const selector = snapshot.nodes[row.triggerNodeId]?.selector;
+    if ('unreachable' in row) {
+      const { probe, screenshot } = row.unreachable;
+      if (probe.sourceUrl !== facts.sourceUrl || probe.triggerSelector !== selector || probe.screenshotHash !== screenshot.sha256 || probe.hits.some(hit => hit.targetOrDescendant) || !probe.hits.some(hit => hit.hitSelector)) throw Error('source_hover_unreachable_proof_invalid');
+      continue;
+    }
     const states = row.captures.map(item => item.state);
     if (states.map(item => item.stage).join(',') !== 'default,hover,restored' || states.some(item => item.sourceUrl !== facts.sourceUrl || item.triggerSelector !== selector) || states.map(item => item.hovered).join(',') !== 'false,true,false') throw Error('source_hover_pointer_cycle_invalid');
     if (states.some((item, index) => item.screenshotHash !== row.captures[index].screenshot.sha256 || item.affected[0]?.selector !== selector || item.affected.map(effect => effect.selector).join('\0') !== states[0].affected.map(effect => effect.selector).join('\0'))) throw Error('source_hover_capture_identity_conflict');

@@ -6,7 +6,7 @@ import type { BodySourceUnits } from './body-prepare.js';
 export interface CarouselArrowObservation {
   componentKey: string;
   snapshotId: string;
-  sourceNodeIds: { previous: string; next: string };
+  sourceNodeIds: { previous: string | null; next: string | null };
   visible: { previous: boolean; next: boolean };
   graphic: { previous: 'svg' | 'pseudo' | 'unknown'; next: 'svg' | 'pseudo' | 'unknown' };
 }
@@ -15,6 +15,8 @@ const direction = (attributes: Record<string, string>): 'previous' | 'next' | un
   const classes = attributes.class ?? '';
   if (/(?:^|\s)(?:splide__arrow--prev|swiper-button-prev(?:-\w+)?)(?:\s|$)/.test(classes)) return 'previous';
   if (/(?:^|\s)(?:splide__arrow--next|swiper-button-next(?:-\w+)?)(?:\s|$)/.test(classes)) return 'next';
+  if (/(?:^|\s)button-left(?:\s|$)/.test(classes)) return 'previous';
+  if (/(?:^|\s)button-right(?:\s|$)/.test(classes) || /(?:^|\s)carousel-arrow\s+[^\"]*\bright\b/.test(classes)) return 'next';
   return undefined;
 };
 const observedGraphic = (packet: ObservationPacketV2, nodeId: string): CarouselArrowObservation['graphic']['previous'] => {
@@ -67,13 +69,11 @@ const ancestorClasses = (blocks: Native44Component[], componentKey: string): str
 const sourcePair = (packet: ObservationPacketV2, candidates: Array<ObservationPacketV2['nodes'][string]>, componentKey: string) => {
   const previous = candidates.filter(node => direction(node.attributes) === 'previous');
   const next = candidates.filter(node => direction(node.attributes) === 'next');
-  if (!previous.length || previous.length !== next.length) throw Error(`carousel_navigation_source_ambiguous:${componentKey}/${packet.snapshot.id}`);
+  if (!previous.length && !next.length) throw Error(`carousel_navigation_source_ambiguous:${componentKey}/${packet.snapshot.id}`);
   const visiblePrevious = previous.filter(node => visible(packet, node.id));
   const visibleNext = next.filter(node => visible(packet, node.id));
-  if (visiblePrevious.length > 1 || visibleNext.length > 1 || visiblePrevious.length !== visibleNext.length) throw Error(`carousel_navigation_source_ambiguous:${componentKey}/${packet.snapshot.id}`);
-  if (previous.length > 1 && visiblePrevious.length === 0) return { previous: previous[0], next: next[0] };
-  if (previous.length > 1) return { previous: visiblePrevious[0], next: visibleNext[0] };
-  return { previous: previous[0], next: next[0] };
+  if (visiblePrevious.length > 1 || visibleNext.length > 1) throw Error(`carousel_navigation_source_ambiguous:${componentKey}/${packet.snapshot.id}`);
+  return { previous: visiblePrevious[0] ?? previous[0] ?? null, next: visibleNext[0] ?? next[0] ?? null };
 };
 
 /** A source-derived gate for current v3 replicas. Historical programs are not
@@ -107,9 +107,9 @@ export function assertCarouselNavigationMapped(input: {
       const candidates = unit.nodeIds.map(id => packet.nodes[id]).filter(Boolean);
       const { previous, next } = sourcePair(packet, candidates, component.key);
       observations.push({ componentKey: component.key, snapshotId: unit.snapshotId,
-        sourceNodeIds: { previous: previous.id, next: next.id },
-        visible: { previous: visible(packet, previous.id), next: visible(packet, next.id) },
-        graphic: { previous: observedGraphic(packet, previous.id), next: observedGraphic(packet, next.id) } });
+        sourceNodeIds: { previous: previous?.id ?? null, next: next?.id ?? null },
+        visible: { previous: previous ? visible(packet, previous.id) : false, next: next ? visible(packet, next.id) : false },
+        graphic: { previous: previous ? observedGraphic(packet, previous.id) : 'unknown', next: next ? observedGraphic(packet, next.id) : 'unknown' } });
     }
     if (input.phone) {
       const section = input.phone.sections.find(item => component.key === item.key || component.key.startsWith(`${item.key}_`));
@@ -128,9 +128,9 @@ export function assertCarouselNavigationMapped(input: {
         const candidates = Object.values(packet.nodes).filter(node => underOwner(node.id));
         const { previous, next } = sourcePair(packet, candidates, component.key);
         observations.push({ componentKey: component.key, snapshotId: packet.snapshot.id,
-          sourceNodeIds: { previous: previous.id, next: next.id },
-          visible: { previous: visible(packet, previous.id), next: visible(packet, next.id) },
-          graphic: { previous: observedGraphic(packet, previous.id), next: observedGraphic(packet, next.id) } });
+          sourceNodeIds: { previous: previous?.id ?? null, next: next?.id ?? null },
+          visible: { previous: previous ? visible(packet, previous.id) : false, next: next ? visible(packet, next.id) : false },
+          graphic: { previous: previous ? observedGraphic(packet, previous.id) : 'unknown', next: next ? observedGraphic(packet, next.id) : 'unknown' } });
       }
     }
     const own = observations.filter(row => row.componentKey === component.key);

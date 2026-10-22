@@ -5,6 +5,21 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import type { ObservationPacketV2 } from '../src/replica-v2/observation.js';
+import { validateObservationPacketV2 } from '../src/replica-v2/observation.js';
+
+test('animated SVG descendants retain finite source geometry', async () => {
+  const source = await readFile(path.resolve('D:/cloneWP/src/replica-v2/collect.browser.js'), 'utf8'), browser = await chromium.launch({ headless: true }), page = await browser.newPage();
+  try {
+    await page.setContent('<title>Animated SVG fixture</title><style>@keyframes move{from{transform:translateX(0)}to{transform:translateX(20px)}}.moving{animation:move 2s infinite}</style><main id="observation"><div class="moving"><svg width="20" height="20"><path d="M0 0h20v20H0z"/></svg></div></main>');
+    const transport = JSON.parse(await page.evaluate(`${source};collectObservationV2({snapshotId:'animated-svg',rootSelectors:['#observation']})`));
+    const packet = validateObservationPacketV2(JSON.parse(transport.chunks[0].json));
+    for (const node of Object.values(packet.nodes).filter(node => node.tag === 'svg' || node.tag === 'path')) {
+      const geometry = packet.layouts[node.layoutId].captureGeometry;
+      assert.ok(geometry);
+      assert.ok(Number.isFinite(geometry.rect.x) && Number.isFinite(geometry.rect.y));
+    }
+  } finally { await browser.close(); }
+});
 
 test('observation paths retain html and all ancestors beyond ten levels, matching independent scene paths', async () => {
   const source = await readFile(path.resolve('D:/cloneWP/src/replica-v2/collect.browser.js'), 'utf8'), browser = await chromium.launch({ headless: true }), page = await browser.newPage();

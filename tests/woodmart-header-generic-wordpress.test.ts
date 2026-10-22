@@ -193,6 +193,14 @@ test('all actual server metadata filters tolerate WoodMart derived-cache creatio
   }
 });
 
+test('own page observation ignores Elementor asset cache and decodes WordPress menu names', async () => {
+  const php = await readFile(new URL('../src/woodmart-header/generic/wordpress.php', import.meta.url), 'utf8');
+  const filters = await serverMetadataFilters();
+  assert.equal(filters[0].excluded.has('_elementor_page_assets'), true);
+  assert.equal(filters[1].excluded.has('_elementor_page_assets'), true);
+  assert.equal(php.includes("'name'=>html_entity_decode($m->name,ENT_QUOTES|ENT_HTML5,'UTF-8')"), true);
+});
+
 test('the same filters continue detecting real body, page identity and similarly named business metadata edits', async () => {
   for (const { scope, excluded } of await serverMetadataFilters()) {
     const baseline = metadataInputHash(excluded, protectedMetadataFixture);

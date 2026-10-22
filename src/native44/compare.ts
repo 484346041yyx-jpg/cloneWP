@@ -14,6 +14,7 @@ import { captureLayoutStableScreenshot } from '../verification/layout-stable-scr
 import { createNative44CaptureMediaSession, type Native44CaptureMediaMetrics, type Native44CaptureMediaSession } from './capture-media-session.js';
 import { NATIVE44_SELECTION_RULES_HASH } from './selection-rules.js';
 import type { Native44CompareGap, Native44MeasuredModule } from './contracts.js';
+import { compareNative44VisualModules } from './visual-audit.js';
 import type { FileRef } from '../replica-v2/types.js';
 import { assertNative44ReleaseIdentity, readNative44HistoricalReleaseEvidence, readNative44ReleaseLock } from './release-lock.js';
 import { readNative44CurrentCaptureManifest } from './current-capture-binding.js';
@@ -93,6 +94,8 @@ export function validateNative44StateAdaptations(manifest: Native44CompareManife
 }
 export interface Native44CompareManifest extends Native44CompareSnapshot {
   reviewWorkflow?: typeof NATIVE44_WHOLE_PAGE_REVIEW_WORKFLOW;
+  /** Absent on frozen tasks created before the rendered visual audit. */
+  visualAuditVersion?: 1 | 2 | 3;
   releaseLock?: FileRef;
   replicationProfile?: Native44ReplicationProfile;
   selectionRulesHash?: string;
@@ -232,6 +235,11 @@ export function analyzeNative44Captures(manifest: Native44CompareManifest, captu
         if ((source.media ?? []).some(item => item.drawable === false)) gaps.push({ category: 'media', moduleKey: module.key, viewport: capture.viewport, detail: 'Source media is not drawable; comparison evidence is incomplete', blocking: true });
         if ((source.media ?? []).some(item => item.drawable === null)) gaps.push({ category: 'evidence', moduleKey: module.key, viewport: capture.viewport, detail: 'Source media decode/paint was not observed; a visible DOM use cannot substitute for drawable evidence', blocking: true });
         if ((target.media ?? []).some(item => !item.drawable) || module.expectedMedia !== undefined && (target.media ?? []).length < module.expectedMedia) gaps.push({ category: 'media', moduleKey: module.key, viewport: capture.viewport, detail: 'Target has missing or undecodable required media', blocking: true });
+        if (manifest.visualAuditVersion === 1 || manifest.visualAuditVersion === 2 || manifest.visualAuditVersion === 3) {
+          if (!source.visual || !target.visual) gaps.push({ category: 'evidence', moduleKey: module.key, viewport: capture.viewport, detail: 'Source or target rendered visual samples are missing', blocking: true });
+          else if (manifest.visualAuditVersion >= 2 && (!source.visual.paintLayers || !target.visual.paintLayers)) gaps.push({ category: 'evidence', moduleKey: module.key, viewport: capture.viewport, detail: 'Generic painted-region samples are missing', blocking: true });
+          else for (const mismatch of compareNative44VisualModules(source.visual, target.visual, manifest.visualAuditVersion >= 2, manifest.visualAuditVersion >= 3).slice(0, 30)) gaps.push({ category: 'structure', moduleKey: module.key, viewport: capture.viewport, detail: `${mismatch.text ? `“${mismatch.text.slice(0, 80)}”: ` : ''}${mismatch.detail}`, blocking: true });
+        }
         if (module.stateAdaptation?.mode === 'static-overflow' && target.state?.carouselIndex !== undefined) gaps.push({ category: 'interaction', moduleKey: module.key, viewport: capture.viewport, detail: 'Declared static/overflow adaptation still exposes an undeclared target carousel runtime', blocking: true });
         if (module.stateAdaptation?.mode === 'target-catalog') for (const key of module.stateAdaptation.targetComponentKeys ?? []) {
           if (!(capture.target.productChecks ?? []).some(row => row.componentKey === key && row.status === 'passed') || manifest.productChecks?.find(check => check.componentKey === key)?.carouselExpected && !(capture.target.interactionChecks ?? []).some(row => row.componentKey === key && row.status === 'passed')) gaps.push({ category: 'interaction', moduleKey: module.key, viewport: capture.viewport, detail: `Adapted target catalog ${key} has no complete actual product/control proof; a source pet frame cannot provide it`, blocking: true });
@@ -250,6 +258,7 @@ export function analyzeNative44Captures(manifest: Native44CompareManifest, captu
 
 export function validateNative44CompareManifest(manifest: Native44CompareManifest, historicalSelectionRulesHash?: string): void {
   if (manifest.reviewWorkflow !== undefined && manifest.reviewWorkflow !== NATIVE44_WHOLE_PAGE_REVIEW_WORKFLOW) throw Error('Invalid native44 review workflow');
+  if (manifest.visualAuditVersion !== undefined && (![1, 2, 3].includes(manifest.visualAuditVersion) || manifest.reviewWorkflow !== NATIVE44_WHOLE_PAGE_REVIEW_WORKFLOW)) throw Error('Invalid native44 visual audit contract');
   if (manifest.releaseLock && (!isDesktopBrowserProfile(manifest.replicationProfile) || typeof manifest.releaseLock.path !== 'string' || !manifest.releaseLock.path || !/^[a-f0-9]{64}$/.test(manifest.releaseLock.sha256))) throw Error('Comparison release lock identity is invalid');
   const desktop = isDesktopBrowserProfile(manifest.replicationProfile), required = native44ProfileViewports(manifest.replicationProfile);
   if (historicalSelectionRulesHash !== undefined && !/^[a-f0-9]{64}$/.test(historicalSelectionRulesHash)) throw Error('Invalid historical comparison selection rules hash');

@@ -6,6 +6,7 @@ import { validateSourceFactsV2, type SourceFactsV2 } from '../replica-v2/source.
 import { validateObservationPacketV2, type ObservationPacketV2 } from '../replica-v2/observation.js';
 import type { FileRef } from '../replica-v2/types.js';
 import type { Native44CompareGap, Native44MeasuredModule } from './contracts.js';
+import { opaqueSolidBackground, visiblePaint, visualBackgroundImageKind } from './visual-audit.js';
 import { assertNative44ProfileIdentity, isDesktopBrowserProfile, native44ProfileViewports, type Native44ReplicationProfile } from './profile.js';
 import { readNative44BrowserRendering, validateNative44BrowserObservation, verifyNative44BrowserSegmentPixels, type Native44BrowserObservation } from './source.js';
 import { readObservationDirectoryV2 } from '../replica-v2/observation.js';
@@ -157,6 +158,7 @@ export async function readNative44SourceCapture(loaded: LoadedNative44SourceCapt
   const nodes = Object.assign({}, ...packets.map(packet => packet.nodes)) as ObservationPacketV2['nodes'];
   const layouts = Object.assign({}, ...packets.map(packet => packet.layouts)) as ObservationPacketV2['layouts'];
   const styles = Object.assign({}, ...packets.map(packet => packet.styles)) as ObservationPacketV2['styles'];
+  const texts = Object.values(Object.assign({}, ...packets.map(packet => packet.texts))) as Array<ObservationPacketV2['texts'][string]>;
   const usages = Object.values(Object.assign({}, ...packets.map(packet => packet.usages))) as Array<ObservationPacketV2['usages'][string]>;
   const resources = Object.assign({}, ...packets.map(packet => packet.resources)) as ObservationPacketV2['resources'];
   const interactions = Object.values(Object.assign({}, ...packets.map(packet => packet.interactions))) as Array<ObservationPacketV2['interactions'][string]>;
@@ -177,6 +179,62 @@ export async function readNative44SourceCapture(loaded: LoadedNative44SourceCapt
     const within = (nodeId: string): boolean => { const seen = new Set<string>(); let current: string | null = nodeId; while (current && !seen.has(current)) { if (variant.nodeIds.includes(current)) return true; seen.add(current); current = nodes[current]?.parentId ?? null; } return false; };
     const owners = variant.nodeIds.map(nodeId => nodes[nodeId]), rectangles = owners.map(node => layouts[node.layoutId].rect), left = Math.min(...rectangles.map(rect => rect.x)), top = Math.min(...rectangles.map(rect => rect.y)), right = Math.max(...rectangles.map(rect => rect.x + rect.width)), bottom = Math.max(...rectangles.map(rect => rect.y + rect.height));
     const visible = owners.some(owner => owner.visible), css = Object.fromEntries(Object.entries(styles[owners[0].styleId]).filter(([property, value]) => owners.every(owner => styles[owner.styleId][property] === value)));
+    const background = (start: string): string | null => {
+      const seen = new Set<string>(); let cursor: string | null = start;
+      while (cursor && !seen.has(cursor)) {
+        seen.add(cursor); const node: ObservationPacketV2['nodes'][string] | undefined = nodes[cursor], solid = node && opaqueSolidBackground(styles[node.styleId]);
+        if (solid !== undefined) return solid;
+        cursor = node?.parentId ?? null;
+      }
+      return null;
+    };
+    const control = (start: string) => {
+      const seen = new Set<string>(); let cursor: string | null = start;
+      while (cursor && !seen.has(cursor)) {
+        seen.add(cursor); const node: ObservationPacketV2['nodes'][string] | undefined = nodes[cursor]; if (!node) break;
+        if (['a', 'button'].includes(node.tag.toLowerCase()) || ['tab', 'button', 'link'].includes(node.attributes.role ?? '')) {
+          const style = styles[node.styleId], rect = layouts[node.layoutId]?.rect;
+          if (!rect) return undefined;
+          return { width: rect.width, height: rect.height, background: style['background-color'] ?? '', color: style.color ?? '', borderBottomWidth: style['border-bottom-width'] ?? style['border-width'] ?? '0px', beforeContent: style['before:content'] ?? 'none', afterContent: style['after:content'] ?? 'none' };
+        }
+        cursor = node.parentId;
+      }
+      return undefined;
+    };
+    const visualTexts = texts.filter(text => within(text.nodeId) && actuallyVisible(text.nodeId) && text.text.trim().length >= 3 && text.text.trim().length <= 240).flatMap(text => {
+      const node = nodes[text.nodeId], style = styles[node.styleId];
+      const rect = layouts[node.layoutId].rect, lineHeight = Number.parseFloat(style['line-height'] ?? ''), lineCount = Number.isFinite(lineHeight) && lineHeight > 0 ? Math.max(1, Math.round(rect.height / lineHeight)) : undefined;
+      return [{ text: text.text, color: style.color ?? '', fontSize: style['font-size'] ?? '', lineHeight: style['line-height'] ?? '', x: rect.x - left, width: rect.width, height: rect.height, ...(lineCount ? { lineCount } : {}), whiteSpace: style['white-space'] ?? '', ...(control(text.nodeId) ? { control: control(text.nodeId) } : {}) }];
+    }).slice(0, 160);
+    const progress = Object.values(nodes).filter(node => within(node.id) && /(?:^|\s)(?:splide-carousel-progress|swiper-pagination-progressbar|wd-[\w-]*progress)(?:\s|$)/.test(node.attributes.class ?? '') && !/progress(?:-bar|bar-fill)/.test((node.attributes.class ?? '').replace(/(?:^|\s)splide-carousel-progress(?:\s|$)/, ''))).map(node => {
+      const rect = layouts[node.layoutId]?.rect; if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+      const fill = node.childIds.map(id => nodes[id]).find(child => child && /(?:progress-bar|progressbar-fill)/.test(child.attributes.class ?? ''));
+      const fillRect = fill && layouts[fill.layoutId]?.rect;
+      return { x: rect.x - left, width: rect.width, height: rect.height, background: styles[node.styleId]['background-color'] ?? '', fillFraction: fillRect ? fillRect.width / rect.width : null };
+    }).filter((row): row is NonNullable<typeof row> => row !== null);
+    const arrows = Object.values(nodes).filter(node => within(node.id) && ['button', 'a'].includes(node.tag.toLowerCase())).flatMap(node => {
+      const name = `${node.attributes.class ?? ''} ${node.attributes['aria-label'] ?? ''}`;
+      const side = /(?:^|[\s_-])prev(?:ious)?(?:[\s_-]|$)/i.test(name) ? 'prev' as const : /(?:^|[\s_-])next(?:[\s_-]|$)/i.test(name) ? 'next' as const : null;
+      if (!side || !/(?:arrow|swiper-button|slider-button|carousel-button|splide)/i.test(name)) return [];
+      const style = styles[node.styleId], rect = layouts[node.layoutId]?.rect, icon = node.childIds.map(id => nodes[id]).find(child => child && ['svg', 'i'].includes(child.tag.toLowerCase()));
+      if (!rect) return [];
+      const iconStyle = icon && styles[icon.styleId], iconRect = icon && layouts[icon.layoutId]?.rect;
+      const pseudo = !iconStyle && (style['before:content'] && !['none', 'normal'].includes(style['before:content']) ? 'before' : style['after:content'] && !['none', 'normal'].includes(style['after:content']) ? 'after' : null);
+      const size = (value: string | undefined, fallback: number) => /^\d+(?:\.\d+)?px$/.test(value ?? '') ? Number.parseFloat(value!) : fallback;
+      return [{ side, x: rect.x - left, width: size(style.width, rect.width), height: size(style.height, rect.height), background: style['background-color'] ?? '', color: style.color ?? '', borderRadius: style['border-radius'] ?? '', iconWidth: iconStyle ? size(iconStyle.width, iconRect?.width ?? 0) : pseudo ? size(style[`${pseudo}:width`], size(style[`${pseudo}:font-size`], 0)) : null, iconHeight: iconStyle ? size(iconStyle.height, iconRect?.height ?? 0) : pseudo ? size(style[`${pseudo}:height`], size(style[`${pseudo}:font-size`], 0)) : null }];
+    });
+    const paintLayers = Object.values(nodes).filter(node => within(node.id) && actuallyVisible(node.id)).flatMap(node => {
+      const rect = layouts[node.layoutId]?.rect, style = styles[node.styleId];
+      if (!rect || !visiblePaint(style)) return [];
+      return [{ x: rect.x - left, y: rect.y - top, width: rect.width, height: rect.height,
+        background: style['background-color'] ?? '', backgroundImage: visualBackgroundImageKind(style['background-image'] ?? ''),
+        borderWidth: style['border-width'] ?? '0px', borderColor: style['border-color'] ?? '', borderRadius: style['border-radius'] ?? '0px',
+        boxShadow: style['box-shadow'] ?? 'none', opacity: style.opacity ?? '1' }];
+    });
+    const mediaGeometry = Object.values(nodes).filter(node => within(node.id) && ['img', 'svg'].includes(node.tag.toLowerCase()) && actuallyVisible(node.id)).slice(0, 100).map(node => {
+      const rect = layouts[node.layoutId].rect;
+      return { x: rect.x - left, y: rect.y - top, width: rect.width, height: rect.height };
+    });
     if (visible !== variant.visible) gaps.push({ category: 'structure', moduleKey: module.key, viewport: viewport.name, detail: 'Planned source variant visibility differs from the actual source node observation', blocking: true });
     const paintedPositions = new Set<string>();
     const media = usages.filter(usage => usage.visible && nodes[usage.nodeId]?.visible && within(usage.nodeId)).flatMap(usage => {
@@ -216,7 +274,7 @@ export async function readNative44SourceCapture(loaded: LoadedNative44SourceCapt
     const exactStates = states.filter(state => variant.nodeIds.includes(state.nodeId));
     const state = exactStates.length === 1 ? exactStates[0] : states.length === 1 ? states[0] : undefined;
     if (state?.visualFrame) { const frame = state.visualFrame; stateEvidence.push({ moduleKey: module.key, nodeId: state.nodeId, trackNodeId: state.trackNodeId!, method: frame.method, screenshotHash: frame.screenshotHash, observedAt: frame.observedAt, rawDOMIndex: observed!.states.find(raw => raw.nodeId === state.nodeId)!.carouselIndex!, screenshotIndex: frame.index, notes: frame.notes, ...(frame.counterText ? { counterText: frame.counterText } : {}) }); }
-    result.push({ key: module.key, count: 1, visible, box: { x: left, y: top, width: right - left, height: bottom - top }, css, media, ...(state ? { state: { carouselIndex: state.carouselIndex, expanded: state.expanded, hover: state.hover } } : {}) });
+    result.push({ key: module.key, count: 1, visible, box: { x: left, y: top, width: right - left, height: bottom - top }, css, media, visual: { solidBackground: background(owners[0].id), texts: visualTexts, progress, arrows, mediaGeometry, paintLayers }, ...(state ? { state: { carouselIndex: state.carouselIndex, expanded: state.expanded, hover: state.hover } } : {}) });
   }
   const extension = path.extname(snapshot.screenshot.path).toLowerCase(), originalFile = path.resolve(path.dirname(loaded.set.sourceFacts.path), snapshot.screenshot.path), outputFile = outputPNG ? ['.jpg', '.jpeg', '.webp', '.png'].includes(extension) ? outputPNG.slice(0, outputPNG.length - path.extname(outputPNG).length) + extension : outputPNG : originalFile;
   if (outputPNG) await copyFile(originalFile, outputFile);

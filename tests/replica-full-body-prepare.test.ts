@@ -22,10 +22,12 @@ function packet(id: string, width: number, height: number): ObservationPacketV2 
   const layouts = Object.fromEntries(definitions.map((node, i) => [`l${i}`, { id: `l${i}`, rect: { x: 0, y: i < 2 ? 0 : 120, width, height: 100 }, contentRect: { x: 0, y: i < 2 ? 0 : 120, width, height: 100 }, padding: [0, 0, 0, 0], margin: [0, 0, 0, 0], gap: { row: 0, column: 0 }, display: 'block', position: 'static', maxWidth: 'none', direction: 'ltr', flowIndex: i }]));
   return validateObservationPacketV2({ version: 2, kind: 'observation-packet', snapshot: { id, url: sourceUrl, title: 'Alder source fixture', capturedAt: '2026-10-19T00:00:00.000Z', viewport: { name: width === 1920 ? 'desktop' : 'desktop-narrow', width, height, clientWidth: width, scrollbarWidth: 0, devicePixelRatio: 1 }, pageHeight: 2000, screenshot: { path: `${id}.png`, sha256: '0'.repeat(64), width, height: 2000 } }, nodes: Object.fromEntries(definitions.map((node, i) => [node.id, { ...node, selector: `#${node.id}`, attributes: {}, styleId: 's', layoutId: `l${i}`, visible: true }])), regions: [{ id: 'rh', nodeId: 'header', contentNodeId: 'header', role: 'header', order: 0, gapBefore: 0 }, { id: 'rb', nodeId: 'hero', contentNodeId: 'hero', role: 'hero', order: 1, gapBefore: 0 }], texts: { th: { id: 'th', nodeId: 'header-title', regionId: 'rh', text: 'Alder navigation', kind: 'label' }, tb: { id: 'tb', nodeId: 'headline', regionId: 'rb', text: 'Alder content', kind: 'heading', level: 1 } }, styles: { s: {} }, layouts, resources: {}, usages: {}, interactions: {}, gaps: [] });
 }
-async function fixture() {
+async function fixture(mislabelBodyRegion = false) {
   const directory = path.join(ROOT, '.cache', `replica-full-body-test-${randomUUID()}`); await mkdir(directory, { recursive: true });
   const put = async (name: string, value: unknown): Promise<FullReplicaFileRef> => { const filename = path.join(directory, name), bytes = typeof value === 'string' ? value : JSON.stringify(value); await writeFile(filename, bytes); return { path: filename, sha256: hash(bytes) }; };
-  const packets = [packet('wide', 1920, 1080), packet('narrow', 1440, 1000)], packetRefs = await Promise.all(packets.map(row => put(`${row.snapshot.id}.json`, row)));
+  const packets = [packet('wide', 1920, 1080), packet('narrow', 1440, 1000)];
+  if (mislabelBodyRegion) for (const row of packets) row.regions.find(region => region.id === 'rb')!.role = 'header';
+  const packetRefs = await Promise.all(packets.map(row => put(`${row.snapshot.id}.json`, row)));
   const evidence = { version: 1, kind: 'native44-body-source-evidence', taskId: 'alder-full', sourceUrl, snapshots: packets.map((row, i) => ({ id: row.snapshot.id, viewport: row.snapshot.viewport, packets: [packetRefs[i]] })) };
   const evidenceRef = await put('source-evidence.json', evidence);
   const facts = buildSourceFactsV2({ manifestPath: evidenceRef.path, manifestSha256: evidenceRef.sha256, manifest: { version: 2, kind: 'observation-manifest', sourceUrl, provenance: { method: 'user-opened-browser', observer: 'cua_repl', browser: 'chrome' }, packets: [], screenshots: [] }, packets, packetFiles: packetRefs.map((ref, i) => ({ ...ref, snapshotId: packets[i].snapshot.id })) });
@@ -49,6 +51,9 @@ test('actual body preparation verifies typed packet ownership and keeps separate
     // The fixture intentionally has auxiliary screenshot placeholders: preparation never confers visual acceptance.
     assert.equal('review' in body, false);
   } finally { await f.cleanup(); }
+});
+test('a mislabeled region does not turn non-header body content into a site header', async () => {
+  const f = await fixture(true); try { await assert.doesNotReject(prepareActualBody(f.manifest)); } finally { await f.cleanup(); }
 });
 test('a source fact cannot be rewritten while retaining an authentic packet hash', async () => {
   const f = await fixture(); try { f.facts.facts['wide:text:tb'].value.text = 'Invented body'; await f.refresh(); await assert.rejects(prepareActualBody(f.manifest), /facts_not_packet_derived/); } finally { await f.cleanup(); }

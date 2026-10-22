@@ -8,6 +8,7 @@ import { navigationFormPhpHelpers, parseNavigationForms } from './navigation-for
 import { native44Id } from '../native44/adapters.js';
 import { navigationReturnPhpHelpers } from './navigation-return.js';
 import { assertInterruptedStyleProof, type InterruptedStyleProof } from './style-recovery.js';
+import { containerTreePlanSchema } from './container-tree.js';
 
 export interface FullReplicaRemotePage {
   pageId: number; runId: string; status: 'draft' | 'publish'; template: string; title: string; slug: string;
@@ -18,7 +19,7 @@ export interface FullReplicaRemoteSnapshot {
   hash: string; header: HeaderModuleInspection; page: FullReplicaRemotePage | null;
   receipts: Record<string, { action: FullReplicaDriverAction; payloadHash: string; state: 'started' | 'complete'; result?: Record<string, unknown> }>;
 }
-export type FullReplicaDriverAction = 'create-page' | 'style' | 'shell' | 'motion' | 'navigation-forms' | 'navigation-return' | 'publish';
+export type FullReplicaDriverAction = 'create-page' | 'style' | 'shell' | 'motion' | 'layout' | 'navigation-forms' | 'navigation-return' | 'publish';
 export interface FullReplicaDriverRequest { action: FullReplicaDriverAction; operationId: string; expectedHash: string; payload: Record<string, unknown> }
 export interface FullReplicaDriverResult { snapshot: FullReplicaRemoteSnapshot; result: Record<string, unknown> }
 export interface FullReplicaDriver {
@@ -44,9 +45,9 @@ export class WordPressFullReplicaDriver implements FullReplicaDriver {
   private async code(identityInput: HeaderModuleIdentity, data: Record<string, unknown>): Promise<string> {
     const identity = validateHeaderModuleIdentity(identityInput);
     if (identity.targetOrigin !== this.transport.origin) fail('target_mismatch');
-    const [header, originalHelper, recovery] = await Promise.all([loadFullReplicaHeaderHelper(), readFile(new URL('./wordpress-full.php', import.meta.url), 'utf8'), readFile(new URL('./style-recovery.php', import.meta.url), 'utf8')]);
+    const [header, originalHelper, recovery, containerTree] = await Promise.all([loadFullReplicaHeaderHelper(), readFile(new URL('./wordpress-full.php', import.meta.url), 'utf8'), readFile(new URL('./style-recovery.php', import.meta.url), 'utf8'), readFile(new URL('./container-tree.php', import.meta.url), 'utf8')]);
     const marker="  if(($input['action']??'')==='inspect')";if(originalHelper.split(marker).length!==2)fail('style_recovery_helper_changed');
-    const helper=originalHelper.replace(marker,recovery+'\n'+marker);
+    const helper=originalHelper.replace(marker,recovery+'\n'+containerTree+'\n'+marker);
     const input = canonicalHeaderJson({ identity, ...data });
     return `$headerRead=static function($input){\n${header}\n};\n${navigationFormPhpHelpers}\n${navigationReturnPhpHelpers}\n$input=json_decode(base64_decode('${Buffer.from(input).toString('base64')}'),true);\n${helper}`;
   }
@@ -75,8 +76,9 @@ export class WordPressFullReplicaDriver implements FullReplicaDriver {
     return result;
   }
   async mutate(identity: HeaderModuleIdentity, request: FullReplicaDriverRequest, intent: HeaderPHPWriteIntent): Promise<FullReplicaDriverResult> {
-    if (!['create-page', 'style', 'shell', 'motion', 'navigation-forms', 'navigation-return', 'publish'].includes(request.action) || !/^[A-Za-z0-9_-]{1,100}$/.test(request.operationId) || !hash.test(request.expectedHash) || request.operationId !== intent.operationId || intent.runId !== identity.owner.runId || intent.expectedSnapshotSha256 !== request.expectedHash || intent.resource !== `full-replica/${identity.moduleKey}` || !hash.test(intent.persistedIntentSha256)) fail('intent_invalid');
+    if (!['create-page', 'style', 'shell', 'motion', 'layout', 'navigation-forms', 'navigation-return', 'publish'].includes(request.action) || !/^[A-Za-z0-9_-]{1,100}$/.test(request.operationId) || !hash.test(request.expectedHash) || request.operationId !== intent.operationId || intent.runId !== identity.owner.runId || intent.expectedSnapshotSha256 !== request.expectedHash || intent.resource !== `full-replica/${identity.moduleKey}` || !hash.test(intent.persistedIntentSha256)) fail('intent_invalid');
     if (['shell', 'motion'].includes(request.action) && (!request.payload || Object.keys(request.payload).join(',') !== 'pageId' || !Number.isSafeInteger(request.payload.pageId) || Number(request.payload.pageId) < 1)) fail(`${request.action}_payload_invalid`);
+    if (request.action === 'layout' && (!request.payload || Object.keys(request.payload).sort().join(',') !== 'pageId,plan' || !Number.isSafeInteger(request.payload.pageId) || Number(request.payload.pageId) < 1 || !containerTreePlanSchema.safeParse(request.payload.plan).success)) fail('layout_payload_invalid');
     let navigationIds: string[] | undefined;
     if (request.action === 'navigation-forms' || request.action === 'navigation-return') {
       const p = request.payload;
@@ -90,6 +92,7 @@ export class WordPressFullReplicaDriver implements FullReplicaDriver {
     if (navigationIds && (response.snapshot.page?.pageId !== request.payload.pageId || response.result.pageId !== request.payload.pageId || headerJsonHash(response.result.widgetIds) !== headerJsonHash(navigationIds))) fail('navigation_form_readback_invalid');
     if (request.action === 'shell' && (response.snapshot.page?.pageId !== request.payload.pageId || response.result.pageId !== request.payload.pageId || response.result.titleDisabled !== true || response.result.sidebarDisabled !== true)) fail('shell_readback_invalid');
     if (request.action === 'motion' && (response.snapshot.page?.pageId !== request.payload.pageId || response.result.pageId !== request.payload.pageId || !Array.isArray(response.result.widgetIds) || !response.result.widgetIds.length || response.result.widgetIds.length > 200 || new Set(response.result.widgetIds).size !== response.result.widgetIds.length || response.result.widgetIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(id)))) fail('motion_readback_invalid');
+    if (request.action === 'layout' && (response.snapshot.page?.pageId !== request.payload.pageId || response.result.pageId !== request.payload.pageId)) fail('layout_readback_invalid');
     const receipt = response.snapshot.receipts[request.operationId];
     if (receipt?.state !== 'complete' || receipt.action !== request.action || receipt.payloadHash !== payloadHash || headerJsonHash(receipt.result) !== headerJsonHash(response.result)) fail('receipt_unconfirmed');
     return response;

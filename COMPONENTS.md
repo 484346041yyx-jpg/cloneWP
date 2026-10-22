@@ -43,6 +43,8 @@
 
 容器须有模块归属、独立Grid/Flex、居中限宽、背景/padding、卡片分组或嵌套合同职责。叶子不机械包层，不按层数盲删；运行时DOM wrapper不等于Elementor Container。
 
+复刻先按 [容器树与内容对齐线](D:/cloneWP/docs/container-tree-layout.md) 从大板块到子容器再到叶子组件建立布局。准备阶段冻结共同内容线、每层方向/占比和设备变化；不要先堆小组件、事后以 CSS 强迫父子排列。
+
 页面模式按实际所有者、查询、当前记录判断，不按域名/品牌/URL/模板名猜。归档筛选/排序/结果需同一查询；单品图库、标题、评分、价格、规格、购买和详情需同一商品。固定ID营销集合不是归档；商品集合Tabs不是详情Tabs；营销评价不是商品评论；清单内容不是单品动作。
 
 普通草稿执行器不因此获得归档或单品模板能力。按需读项目reference-elementor的page-context-selection参考及src/native44/page-context.ts，使用其候选、依赖和缺口。

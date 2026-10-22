@@ -9,6 +9,7 @@ export const responsiveViewportSchema = z.object({ width: z.number().int().min(3
 export const responsiveSourceSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]), decisions: responsiveDecisionsSchema.optional(), tablet: z.literal('desktop'), mobileMaxWidth: z.number().int().min(600).max(900),
   viewports: z.array(responsiveViewportSchema).length(2), source: ref,
+  carouselMotionSource: ref.optional(),
 }).strict().superRefine((value, context) => {
   if (value.version === 2 ? !value.decisions : value.decisions !== undefined) context.addIssue({ code: 'custom', message: 'Responsive decisions version mismatch' });
   if (value.decisions) assertDecisionViewports(value.decisions, value.viewports);
@@ -28,6 +29,7 @@ export const responsiveSectionSchema = z.object({
 export const responsiveBodyPlanSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]), decisions: responsiveDecisionsSchema.optional(), tablet: z.literal('desktop'), mobileMaxWidth: z.number().int().min(600).max(900),
   viewports: z.array(responsiveViewportSchema).length(2), source: ref,
+  carouselMotionSource: ref.optional(),
   sections: z.array(responsiveSectionSchema).min(1).max(2000),
 }).strict().superRefine((value, context) => {
   if (value.version === 2 ? !value.decisions : value.decisions !== undefined) context.addIssue({ code: 'custom', message: 'Responsive decisions version mismatch' });

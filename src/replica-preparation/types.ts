@@ -16,7 +16,7 @@ export interface PreparationSection {
 }
 /** A source-derived contract, not an already authored header/body product. */
 export interface PreparationPlan {
-  version: 1 | 2 | 3; kind: 'clonewp-replica-preparation'; taskId: string; runId: string;
+  version: 1 | 2 | 3 | 4; kind: 'clonewp-replica-preparation'; taskId: string; runId: string;
   title: string; slug: string; sourceUrl: string; targetOrigin: string;
   sourceEvidence: PreparationFileRef; sourceFacts: PreparationFileRef; sourceUnits: PreparationFileRef;
   headerAssets: PreparationFileRef; bodyAssets: PreparationFileRef;

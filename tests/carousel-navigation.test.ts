@@ -29,6 +29,14 @@ test('v3 carousel gate rejects a default glyph and accepts scoped graphic decisi
   const observations = assertCarouselNavigationMapped({ program, sourceUnits, snapshots, css });
   assert.equal(observations.length, 10);
   assert.equal(observations.find(row => row.componentKey === 'hero_carousel')?.graphic.previous, 'svg');
+  const singleArrowSnapshots = new Map([...snapshots].map(([id, packet]) => [id, structuredClone(packet)]));
+  const singleArrowUnits = { ...sourceUnits, units: sourceUnits.units.map(unit => unit.componentKeys.includes('hero_carousel')
+    ? { ...unit, nodeIds: unit.nodeIds.filter(id => !/splide__arrow--prev/.test(singleArrowSnapshots.get(unit.snapshotId)?.nodes[id]?.attributes.class ?? '')) }
+    : unit) };
+  for (const packet of singleArrowSnapshots.values()) packet.nodes['hero-n7'].attributes.class = 'aspire-button carousel-arrow chevron-square right unstyled';
+  const singleArrowObservations = assertCarouselNavigationMapped({ program, sourceUnits: singleArrowUnits, snapshots: singleArrowSnapshots, css });
+  assert.equal(singleArrowObservations.find(row => row.componentKey === 'hero_carousel')?.sourceNodeIds.previous, null);
+  assert.equal(singleArrowObservations.find(row => row.componentKey === 'hero_carousel')?.sourceNodeIds.next, 'hero-n7');
   const phonePackets = await Promise.all([390, 430].flatMap(width => ['hero', 'collection', 'looks', 'reviews', 'socials'].map(name => read<ObservationPacketV2>(`${root}/references/sk-jewellery-20261020/phone${width}-${name}-packet.json`))));
   const sections = ['hero', 'collection', 'looks', 'reviews', 'socials'].map(key => ({ key, evidence: phonePackets.filter(packet => packet.nodes[`${key}-n1`]).map(packet => ({ snapshotId: packet.snapshot.id, nodeId: `${key}-n1` })) }));
   const withPhone = assertCarouselNavigationMapped({ program, sourceUnits, snapshots, css: css + `@media(max-width:768px){:page .${native44ModuleClass('hero_carousel')} .elementor-swiper-button{display:none}}`, phone: { packets: phonePackets, sections } });

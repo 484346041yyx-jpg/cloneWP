@@ -34,7 +34,7 @@ try {
   $pageObservation=static function($pid)use($digest){
     $p=get_post($pid);if(!$p)return null;
     // Native cms_block saves clear these two derived caches; front-end QA rebuilds them.
-    $meta=get_post_meta($pid);foreach(['_edit_lock','_edit_last','_elementor_element_cache','_elementor_css','wd_page_css_files','wd_page_css_files_mobile'] as $key)unset($meta[$key]);
+    $meta=get_post_meta($pid);foreach(['_edit_lock','_edit_last','_elementor_element_cache','_elementor_css','_elementor_page_assets','wd_page_css_files','wd_page_css_files_mobile'] as $key)unset($meta[$key]);
     $body=[$p->post_title,$p->post_content,$p->post_excerpt,get_post_meta($pid,'_elementor_data',true),get_post_meta($pid,'_elementor_page_settings',true)];
     return ['pageId'=>(int)$pid,'postType'=>$p->post_type,'status'=>$p->post_status,'template'=>(string)get_post_meta($pid,'_wp_page_template',true),'runId'=>(string)get_post_meta($pid,'_clonewp_run_id',true),'bodyHash'=>$digest($body),'headerId'=>get_post_meta($pid,'_woodmart_whb_header',true)?:null,'snapshotHash'=>$digest([$p->post_title,$p->post_content,$p->post_excerpt,$p->post_status,$p->post_name,$meta])];
   };
@@ -49,7 +49,7 @@ try {
       foreach($native as $item)$items[]=['id'=>(int)$item->ID,'key'=>$keys[$item->ID],'parentKey'=>$item->menu_item_parent?($keys[$item->menu_item_parent]??'__foreign_parent__'):null,'title'=>$item->title,'url'=>$item->url,'order'=>(int)$item->menu_order];
       if(isset($r['menuContent']))foreach($items as &$entry){$block=(int)get_post_meta($entry['id'],'_menu_item_block',true);$meta=get_post_meta($entry['id']);foreach(['_edit_lock','_edit_last'] as $field)unset($meta[$field]);$entry['content']=['blockId'=>$block,'documentHash'=>$contentById[$block]['documentHash']??'','metaHash'=>$digest($meta)];$entry['imageId']=(int)get_post_thumbnail_id($entry['id']);}unset($entry);
       foreach($r['menuContent']??[] as $binding)if(($binding['version']??1)===2&&$binding['menuKey']===$key)foreach($items as &$entry){if($entry['key']===$binding['itemKey']){$entry['content']['dropdown']=[];foreach($dropdownFields as $field)$entry['content']['dropdown'][$field]=(string)get_post_meta($entry['id'],$field,true);}}unset($entry);
-      $menus[$key]=['id'=>(int)$m->term_id,'slug'=>$m->slug,'name'=>$m->name,'items'=>$items];
+      $menus[$key]=['id'=>(int)$m->term_id,'slug'=>$m->slug,'name'=>html_entity_decode($m->name,ENT_QUOTES|ENT_HTML5,'UTF-8'),'items'=>$items];
     }
     $pages=[];foreach($ownPages as $pid){if(get_post_meta($pid,'_clonewp_header_module_owner',true)!==$ownerToken)throw new RuntimeException('hmod_page_ownership_changed');$ob=$pageObservation($pid);if(!$ob)throw new RuntimeException('hmod_page_missing');$pages[(string)$pid]=$ob;}
     $style=null;if(!empty($r['styleId'])){$p=get_post($r['styleId']);if(!$p||$p->post_type!=='cms_block'||get_post_meta($p->ID,'_clonewp_header_module_owner',true)!==$ownerToken)throw new RuntimeException('hmod_style_ownership_changed');$prefix='<style data-clonewp-header-module="'.esc_attr($identity['moduleKey']).'">';$content=$p->post_content;$css=str_starts_with($content,$prefix)&&str_ends_with($content,'</style>')?substr($content,strlen($prefix),-8):$content;$style=['id'=>(int)$p->ID,'css'=>$css];}

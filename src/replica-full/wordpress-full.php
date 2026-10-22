@@ -36,7 +36,7 @@ try {
   };
   if(($input['action']??'')==='inspect')return ['ok'=>true,'value'=>$inspect()];
   $action=$input['action']??'';$operation=$input['operationId']??'';$payload=$input['payload']??[];$payloadHash=$input['payloadHash']??'';
-  if(!in_array($action,['create-page','style','shell','motion','navigation-forms','navigation-return','confirm-navigation-forms','publish'],true)||!preg_match('/^[A-Za-z0-9_-]{1,100}$/',$operation)||!preg_match('/^[a-f0-9]{64}$/',$payloadHash))throw new RuntimeException('full_operation');
+  if(!in_array($action,['create-page','style','shell','motion','layout','navigation-forms','navigation-return','confirm-navigation-forms','publish'],true)||!preg_match('/^[A-Za-z0-9_-]{1,100}$/',$operation)||!preg_match('/^[a-f0-9]{64}$/',$payloadHash))throw new RuntimeException('full_operation');
   $lock='clonewp_header_module_lock_'.hash('sha256',$hid);$lockValue=['operationId'=>$operation,'owner'=>$ownerToken];if(!add_option($lock,$lockValue,'','no'))throw new RuntimeException('full_locked');
   try{
     $before=$inspect();$record=get_option($option,null);
@@ -82,6 +82,15 @@ try {
       $widget=\Elementor\Plugin::$instance->widgets_manager->get_widget_types('nested-carousel');$control=$widget?$widget->get_controls('speed'):null;
       if(!is_array($control)||($control['type']??'')!=='number'||empty($control['frontend_available'])||isset($control['min'])&&$control['min']>0)throw new RuntimeException('full_motion_control');
       $motionIds=[];$patchMotion=function($nodes)use(&$patchMotion,&$motionIds){foreach($nodes as &$node){if(($node['elType']??'')==='widget'&&($node['widgetType']??'')==='nested-carousel'){if(!is_string($node['id']??null)||!is_array($node['settings']??null))throw new RuntimeException('full_motion_node');$motionIds[]=$node['id'];$node['settings']['speed']=0;}if(!empty($node['elements']))$node['elements']=$patchMotion($node['elements']);}unset($node);return $nodes;};$motionElements=$patchMotion($p['elements']);if(!$motionIds||count($motionIds)>30)throw new RuntimeException('full_motion_count');
+    }elseif($action==='layout'){
+      $keys=array_keys($payload);sort($keys);if($keys!==['pageId','plan']||!$p['built']||$p['headerId']!==$hid)throw new RuntimeException('full_layout_payload');
+      $container=\Elementor\Plugin::$instance->elements_manager->get_element_types('container');$registered=$container?$container->get_controls():null;if(!is_array($registered))throw new RuntimeException('full_layout_registry');
+      foreach($payload['plan']['operations']??[] as $change)foreach(array_keys($change['controls']??[]) as $control){
+        if(isset($registered[$control]))continue;
+        if(preg_match('/^(.+)_(tablet|mobile)$/D',$control,$match)&&isset($registered[$match[1]])&&array_key_exists('responsive',$registered[$match[1]]))continue;
+        throw new RuntimeException('full_layout_unregistered_control');
+      }
+      $layoutElements=$containerTreePatch($p['elements'],$payload['plan']);
     }elseif($action==='navigation-forms'){
       $keys=array_keys($payload);sort($keys);if($keys!==['forms','pageId','sourceUrl','taskId']||!$p['built']||$p['headerId']!==null)throw new RuntimeException('full_navigation_form_payload');
       $widget=\Elementor\Plugin::$instance->widgets_manager->get_widget_types('html');$control=$widget?$widget->get_controls('html'):null;
@@ -105,9 +114,9 @@ try {
       $doc=\Elementor\Plugin::$instance->documents->get($id);if(!$doc)throw new RuntimeException('full_document_create');$doc->set_is_built_with_elementor(true);
       if(!$doc->save(['elements'=>[],'settings'=>['template'=>'elementor_header_footer','hide_title'=>'yes']]))throw new RuntimeException('full_empty_save');update_post_meta($id,'_wp_page_template','elementor_header_footer');
       $result=['pageId'=>(int)$id];
-    }elseif(in_array($action,['style','motion','navigation-forms','navigation-return'],true)){
+    }elseif(in_array($action,['style','motion','layout','navigation-forms','navigation-return'],true)){
       $id=$p['pageId'];$hadPost=array_key_exists('post',$GLOBALS);$previousPost=$GLOBALS['post']??null;$GLOBALS['post']=get_post($id);
-      $settings=$p['settings'];if($action==='style')$settings['custom_css']=$payload['css'];if(!in_array($action,['navigation-forms','navigation-return'],true)){$settings['hide_title']='yes';$settings['template']='elementor_header_footer';}$targetElements=$action==='motion'?$motionElements:($action==='navigation-forms'?$navigationPatch['elements']:($action==='navigation-return'?$navigationReturn['elements']:$p['elements']));
+      $settings=$p['settings'];if($action==='style'){$settings['custom_css']=$payload['css'];$settings['wd__woodmart_whb_header']=$hid;}if(!in_array($action,['navigation-forms','navigation-return','layout'],true)){$settings['hide_title']='yes';$settings['template']='elementor_header_footer';}$targetElements=$action==='motion'?$motionElements:($action==='layout'?$layoutElements:($action==='navigation-forms'?$navigationPatch['elements']:($action==='navigation-return'?$navigationReturn['elements']:$p['elements'])));
       $reflection=new ReflectionProperty('Elementor\Core\Frontend\Performance','is_frontend');$reflection->setAccessible(true);$old=$reflection->getValue();$reflection->setValue(null,false);\Elementor\Plugin::$instance->controls_manager->clear_stack_cache();
       try{ $doc=\Elementor\Plugin::$instance->documents->get($id,false);$stack=$doc->get_stack();$controls=array_merge($stack['controls']??[],$stack['style_controls']??[]);if(($controls['custom_css']['type']??'')!=='code')throw new RuntimeException('full_css_control');
         // CSS-only changes use the native settings save without rendering every
@@ -120,7 +129,7 @@ try {
         if(!$doc||($doc->get_settings('custom_css')??'')!==($settings['custom_css']??''))throw new RuntimeException('full_css_fresh_document');
         if(class_exists('\Elementor\Core\Files\CSS\Post'))(new \Elementor\Core\Files\CSS\Post($id))->update();
       }finally{$reflection->setValue(null,$old);\Elementor\Plugin::$instance->controls_manager->clear_stack_cache();if($hadPost)$GLOBALS['post']=$previousPost;else unset($GLOBALS['post']);}
-      $check=$inspect();if(($check['page']['settings']['custom_css']??'')!==($settings['custom_css']??'')||$documentDigest($check['page']['elements'])!==$documentDigest($targetElements))throw new RuntimeException('full_css_readback');if(in_array($action,['motion','navigation-forms','navigation-return'],true)&&$documentDigest($check['page']['settings'])!==$documentDigest($p['settings']))throw new RuntimeException('full_motion_settings_changed');$result=$action==='motion'?['pageId'=>$id,'widgetIds'=>$motionIds]:($action==='navigation-forms'?['pageId'=>$id,'widgetIds'=>$navigationPatch['widgetIds']]:($action==='navigation-return'?['pageId'=>$id,'widgetIds'=>$navigationReturn['widgetIds']]:['pageId'=>$id]));
+      $check=$inspect();if(($check['page']['settings']['custom_css']??'')!==($settings['custom_css']??'')||$documentDigest($check['page']['elements'])!==$documentDigest($targetElements))throw new RuntimeException('full_css_readback');if($action==='style'&&(($check['page']['settings']['wd__woodmart_whb_header']??null)!==$hid||!function_exists('woodmart_get_post_meta_value')||woodmart_get_post_meta_value($id,'_woodmart_whb_header')!==$hid))throw new RuntimeException('full_header_setting_readback');if(in_array($action,['motion','layout','navigation-forms','navigation-return'],true)&&$documentDigest($check['page']['settings'])!==$documentDigest($p['settings']))throw new RuntimeException('full_motion_settings_changed');$result=$action==='motion'?['pageId'=>$id,'widgetIds'=>$motionIds]:($action==='navigation-forms'?['pageId'=>$id,'widgetIds'=>$navigationPatch['widgetIds']]:($action==='navigation-return'?['pageId'=>$id,'widgetIds'=>$navigationReturn['widgetIds']]:['pageId'=>$id]));
     }elseif($action==='shell'){
       $id=$p['pageId'];update_post_meta($id,'_woodmart_title_off','1');update_post_meta($id,'_woodmart_main_layout','full-width');
       $check=$inspect();if($check['page']['bodyHash']!==$p['bodyHash']||get_post_meta($id,'_woodmart_title_off',true)!=='1'||get_post_meta($id,'_woodmart_main_layout',true)!=='full-width')throw new RuntimeException('full_shell_readback');$result=['pageId'=>$id,'titleDisabled'=>true,'sidebarDisabled'=>true];

@@ -119,7 +119,7 @@ export async function reconcileFullReplica(input: unknown, dependencies: FullRep
   const operation = current.pending, checkpoints = current.checkpoints;
   if (operation.taskId !== manifest.taskId || operation.runId !== manifest.runId || operation.expectedCheckpointHash !== fullReplicaHash(checkpoints)) fail('reconciliation_intent_conflict');
   const expected: FullReplicaRemotePhase = !checkpoints.page ? 'page' : !checkpoints.header ? 'header' : !checkpoints.body ? 'body' : !checkpoints.bound ? 'binding' : 'publish';
-  if (operation.phase !== expected && !(['style-revision', 'header-style-revision', 'motion-revision', 'navigation-return-revision'].includes(operation.phase) && checkpoints.bound && !checkpoints.published)) fail('reconciliation_phase_conflict');
+  if (operation.phase !== expected && !(['style-revision', 'header-style-revision', 'motion-revision', 'layout-revision', 'navigation-return-revision'].includes(operation.phase) && checkpoints.bound && !checkpoints.published)) fail('reconciliation_phase_conflict');
   let result;
   try { const prepared = await prepareFullReplica(manifest, dependencies); result = await dependencies.reconcileOperation(prepared, operation, structuredClone(checkpoints)); }
   catch (error) { await dependencies.writeState({ ...structuredClone(current), updatedAt: new Date().toISOString(), lastError: { phase: operation.phase, operationId: operation.operationId, code: safeFailure(error) } }); throw error; }
@@ -134,6 +134,7 @@ export async function reconcileFullReplica(input: unknown, dependencies: FullRep
     else if (operation.phase === 'binding') { validateBound(value as FullReplicaBoundCheckpoint, checkpoints.header!, checkpoints.body!, manifest); state.checkpoints.bound = value as FullReplicaBoundCheckpoint; }
     else if (operation.phase === 'style-revision') { acceptStyleRevision(state, value as FullReplicaBoundCheckpoint, manifest); }
     else if (operation.phase === 'motion-revision') { if ((value as FullReplicaBoundCheckpoint).cssHash !== state.checkpoints.bound!.cssHash) fail('native_motion_css_changed'); acceptStyleRevision(state, value as FullReplicaBoundCheckpoint, manifest); }
+    else if (operation.phase === 'layout-revision') { if ((value as FullReplicaBoundCheckpoint).cssHash !== state.checkpoints.bound!.cssHash) fail('layout_css_changed'); acceptStyleRevision(state, value as FullReplicaBoundCheckpoint, manifest); }
     else if (operation.phase === 'navigation-return-revision') { if ((value as FullReplicaBoundCheckpoint).cssHash !== state.checkpoints.bound!.cssHash) fail('navigation_return_css_changed'); acceptStyleRevision(state, value as FullReplicaBoundCheckpoint, manifest); }
     else if (operation.phase === 'header-style-revision') { acceptHeaderStyleRevision(state, value as FullReplicaHeaderStyleRevision, manifest); }
     else { if (!state.review || state.review.decision !== 'approved') fail('reconciliation_review_missing'); validatePublished(value as FullReplicaPublishedCheckpoint, checkpoints.bound!, manifest); state.checkpoints.published = value as FullReplicaPublishedCheckpoint; }
@@ -150,6 +151,21 @@ function acceptStyleRevision(state: FullReplicaRunState, value: FullReplicaBound
   const nextBody = { ...body, bodyHash: value.bodyHash, cssHash: value.cssHash, documentHash: value.documentHash };
   validateBody(nextBody, state.checkpoints.page!, manifest); validateBound(value, state.checkpoints.header!, nextBody, manifest);
   state.checkpoints = { ...state.checkpoints, body: nextBody, bound: value }; state.review = null;
+}
+/** Explicitly adopt a changed WordPress body hash only when the protected draft is otherwise identical. */
+export async function rebaseFullReplicaCurrentDraft(input: unknown, dependencies: FullReplicaDependencies, current: FullReplicaRunState, expectedFingerprint: string, currentBodyHash: string, currentDocumentHash: string): Promise<FullReplicaRunState> {
+  const manifest = validateFullReplicaManifest(input); validateResume(current, manifest);
+  const operation = current.pending, bound = current.checkpoints.bound;
+  if (!operation || operation.phase !== 'layout-revision' || !bound || current.checkpoints.published || current.status !== 'write-unknown') fail('rebase_pending_layout_required');
+  if (operation.expectedCheckpointHash !== fullReplicaHash(current.checkpoints) || operation.taskId !== manifest.taskId || operation.runId !== manifest.runId) fail('rebase_intent_conflict');
+  if (fullReplicaFingerprint(bound) !== expectedFingerprint || !/^[a-f0-9]{64}$/.test(currentBodyHash) || !/^[a-f0-9]{64}$/.test(currentDocumentHash) || currentBodyHash === bound.bodyHash && currentDocumentHash === bound.documentHash) fail('rebase_expected_state_invalid');
+  if (!dependencies.rebaseCurrentDraft) fail('rebase_adapter_missing');
+  const adopted = await dependencies.rebaseCurrentDraft(bound, operation, currentBodyHash, currentDocumentHash);
+  for (const key of ['pageId', 'runId', 'headerId', 'headerHash', 'menuHash', 'styleHash', 'cssHash', 'editUrl', 'previewUrl'] as const) if (adopted[key] !== bound[key]) fail('rebase_boundary_changed');
+  if (adopted.bodyHash !== currentBodyHash || adopted.documentHash !== currentDocumentHash) fail('rebase_document_changed');
+  const state = structuredClone(current); acceptStyleRevision(state, adopted, manifest);
+  state.pending = null; state.status = 'awaiting-review'; state.revision++; state.updatedAt = new Date().toISOString(); clearFailure(state);
+  validateResume(state, manifest); await dependencies.writeState(structuredClone(state)); return state;
 }
 /** An additive CSS-only revision of the exact current draft; frozen source inputs stay intact. */
 export async function reviseFullReplicaStyle(input: unknown, dependencies: FullReplicaDependencies, current: FullReplicaRunState, css: FullReplicaFileRef, expectedFingerprint: string): Promise<FullReplicaRunState> {
@@ -215,6 +231,23 @@ export async function reviseFullReplicaNativeMotion(input: unknown, dependencies
   const operation: FullReplicaOperation = { operationId: randomUUID(), taskId: manifest.taskId, runId: manifest.runId, phase: 'motion-revision', expectedCheckpointHash: fullReplicaHash(current.checkpoints), createdAt: new Date().toISOString() }, state = structuredClone(current);
   state.pending = operation; state.review = null; state.status = 'building'; state.updatedAt = new Date().toISOString(); await dependencies.writeState(structuredClone(state));
   try { const result = await dependencies.reviseNativeMotion(prepared, state.checkpoints.bound!, operation); if (result.cssHash !== state.checkpoints.bound!.cssHash) fail('native_motion_css_changed'); acceptStyleRevision(state, result, manifest); state.pending = null; state.revision++; state.status = 'awaiting-review'; clearFailure(state); }
+  catch (error) { state.status = 'write-unknown'; state.lastError = { phase: operation.phase, operationId: operation.operationId, code: safeFailure(error) }; }
+  state.updatedAt = new Date().toISOString(); await dependencies.writeState(structuredClone(state)); return state;
+}
+
+/** Explicit, owned-draft Container-tree revision; all existing widgets and settings remain intact. */
+export async function reviseFullReplicaLayout(input: unknown, dependencies: FullReplicaDependencies, current: FullReplicaRunState, plan: FullReplicaFileRef, expectedFingerprint: string): Promise<FullReplicaRunState> {
+  const manifest = validateFullReplicaManifest(input); validateResume(current, manifest);
+  if (current.pending) fail('reconciliation_required');
+  if (!current.checkpoints.bound || !current.checkpoints.body || current.checkpoints.published) fail('layout_owned_draft_required');
+  if (fullReplicaFingerprint(current.checkpoints.bound) !== expectedFingerprint) fail('layout_stale');
+  if (!dependencies.reviseLayout) fail('layout_adapter_missing');
+  let prepared;
+  try { prepared = await prepareFullReplica(manifest, dependencies); }
+  catch (error) { await dependencies.writeState({ ...structuredClone(current), updatedAt: new Date().toISOString(), lastError: { phase: 'preparation', code: safeFailure(error) } }); throw error; }
+  const operation: FullReplicaOperation = { operationId: randomUUID(), taskId: manifest.taskId, runId: manifest.runId, phase: 'layout-revision', expectedCheckpointHash: fullReplicaHash(current.checkpoints), createdAt: new Date().toISOString() }, state = structuredClone(current);
+  state.pending = operation; state.review = null; state.status = 'building'; state.updatedAt = new Date().toISOString(); await dependencies.writeState(structuredClone(state));
+  try { const result = await dependencies.reviseLayout(prepared, state.checkpoints.bound!, plan, operation); if (result.cssHash !== state.checkpoints.bound!.cssHash) fail('layout_css_changed'); acceptStyleRevision(state, result, manifest); state.pending = null; state.revision++; state.status = 'awaiting-review'; clearFailure(state); }
   catch (error) { state.status = 'write-unknown'; state.lastError = { phase: operation.phase, operationId: operation.operationId, code: safeFailure(error) }; }
   state.updatedAt = new Date().toISOString(); await dependencies.writeState(structuredClone(state)); return state;
 }

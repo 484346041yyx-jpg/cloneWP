@@ -15,7 +15,7 @@ export const FullReplicaFileRefSchema = z.object({ path: z.string().min(1).max(4
 const unit = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/);
 const partition = z.object({ allUnits: z.array(unit).min(1).max(10_000), headerUnits: z.array(unit).min(1).max(10_000), bodyUnits: z.array(unit).min(1).max(10_000) }).strict();
 const manifestSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(CURRENT_REPLICA_WORKFLOW_VERSION), kind: z.literal('clonewp-full-replica'), taskId: key, runId: key,
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).default(CURRENT_REPLICA_WORKFLOW_VERSION), kind: z.literal('clonewp-full-replica'), taskId: key, runId: key,
   title: z.string().trim().min(1).max(200), slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,119}$/),
   sourceUrl: z.string().url(), targetOrigin: z.string().url(),
   headerProvider: z.enum(['woodmart-header-builder', 'component']).default('woodmart-header-builder'),
@@ -32,7 +32,7 @@ function fail(code: string): never { throw Error(`replica_full_${code}`); }
 export function fullReplicaHash(value: unknown): string { return headerJsonHash(value); }
 export function validateFullReplicaManifest(input: unknown): FullReplicaManifest {
   const parsed = manifestSchema.parse(JSON.parse(canonicalHeaderJson(input)));
-  if (parsed.version === 1 ? parsed.responsive !== undefined : !parsed.responsive || parsed.responsive.version !== (parsed.version === 3 ? 2 : 1)) fail('responsive_version_contract');
+  if (parsed.version === 1 ? parsed.responsive !== undefined : !parsed.responsive || parsed.responsive.version !== (parsed.version >= 3 ? 2 : 1)) fail('responsive_version_contract');
   const source = new URL(parsed.sourceUrl);
   if (!['https:', 'http:'].includes(source.protocol) || source.username || source.password || /(?:token|nonce|password|authorization|secret)=/i.test(source.search)) fail('source_url_invalid');
   parsed.targetOrigin = headerTargetOrigin(parsed.targetOrigin);

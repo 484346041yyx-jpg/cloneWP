@@ -43,7 +43,7 @@ export async function runEditorCompletionCLI(args: string[], rootInput = 'D:/clo
     let expected: ReturnType<typeof editorDocumentSchema.parse> | undefined, previous: ReturnType<typeof editorDocumentSchema.parse>[] = [];
     if (command === 'prepare') {
       const saved = await read(await editorPath(dir, flags.saved));
-      const extract = (s: any) => s.fullSnapshot?.page ?? s.snapshot?.page ?? s.page ?? s;
+      const extract = (s: any) => s.value?.currentSnapshot?.page ?? s.fullSnapshot?.page ?? s.snapshot?.page ?? s.page ?? s;
       const p = extract(saved);
       if (p.pageId !== scope.pageId || p.runId !== scope.runId || task.bodyHash && p.bodyHash !== task.bodyHash || !task.bodyHash && p.hash !== task.bodyDocumentHash) throw Error('editor_completion_saved_checkpoint');
       expected = editorDocumentSchema.parse({ elements: p.elements, settings: p.settings });

@@ -15,6 +15,8 @@ test('full replica CLI rejects ambiguous commands/flags and requires a concrete 
   assert.throws(() => parseFullReplicaArguments(['status', '--run-dir', 'r', '--run-dir', 'other']), /arguments_invalid/);
   const parsed = parseFullReplicaArguments(['review', '--run-dir', 'r', '--evidence', 'e']); assert.equal(parsed.command, 'review'); assert.equal(parsed.flags.evidence, 'e');
   assert.equal(parseFullReplicaArguments(['reconcile', '--run-dir', 'r']).command, 'reconcile');
+  assert.equal(parseFullReplicaArguments(['rebase-current-draft', '--run-dir', 'r', '--expected-fingerprint', 'a'.repeat(64), '--current-body-hash', 'b'.repeat(64), '--current-document-hash', 'c'.repeat(64)]).command, 'rebase-current-draft');
+  assert.throws(() => parseFullReplicaArguments(['rebase-current-draft', '--run-dir', 'r', '--expected-fingerprint', 'a'.repeat(64), '--current-body-hash', 'invalid', '--current-document-hash', 'c'.repeat(64)]), /fingerprint_invalid/);
   assert.equal(parseFullReplicaArguments(['recover-style', '--run-dir', 'r']).command, 'recover-style');
   assert.throws(()=>parseFullReplicaArguments(['recover-style','--run-dir','r','--css','foreign']),/arguments_invalid/);
   assert.throws(() => parseFullReplicaArguments(['revise-style', '--run-dir', 'r', '--css', 'c', '--expected-fingerprint', 'auto']), /fingerprint_invalid/);

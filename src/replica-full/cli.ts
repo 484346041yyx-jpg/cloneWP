@@ -6,7 +6,8 @@ import { acquireLock } from '../core/files.js';
 import { canonicalHeaderJson } from '../woodmart-header/contract.js';
 import { fullReplicaHash, validateFullReplicaManifest } from './contract.js';
 import { defaultNativeImagePolicy } from './native-image-policy.js';
-import { reconcileFullReplica, reviseFullReplicaHeaderStyle, reviseFullReplicaNativeMotion, reviseFullReplicaNavigationReturn, reviseFullReplicaStyle, runFullReplica } from './coordinator.js';
+import { rebaseFullReplicaCurrentDraft, reconcileFullReplica, reviseFullReplicaHeaderStyle, reviseFullReplicaLayout, reviseFullReplicaNativeMotion, reviseFullReplicaNavigationReturn, reviseFullReplicaStyle, runFullReplica } from './coordinator.js';
+import { containerTreePlanSchema } from './container-tree.js';
 import { fullReplicaDelivery } from './delivery.js';
 import type { FullReplicaDependencies, FullReplicaManifest, FullReplicaRunState } from './types.js';
 import { createPreparationTiming, wrapFullReplicaDependencies, type PreparationTimingStatus } from '../replica-preparation/timing.js';
@@ -21,17 +22,19 @@ export const FULL_REPLICA_HELP = `Full replica: parallel local header/body prepa
   review --run-dir DIR --evidence FILE
   publish --run-dir DIR
   reconcile --run-dir DIR
+  rebase-current-draft --run-dir DIR --expected-fingerprint SHA256 --current-body-hash SHA256 --current-document-hash SHA256
   recover-style --run-dir DIR
   revise-style --run-dir DIR --css FILE --expected-fingerprint SHA256
   revise-header-style --run-dir DIR --css FILE --expected-fingerprint SHA256
   revise-native-motion --run-dir DIR --expected-fingerprint SHA256
+  revise-layout --run-dir DIR --plan FILE --expected-fingerprint SHA256
   revise-navigation-return --run-dir DIR --expected-fingerprint SHA256
   status --run-dir DIR
 Remote phases: owned Full Width draft -> header resources -> body -> bind -> actual whole-page review -> publish.
 Unknown remote outcomes preserve pending intent and require reconciliation; never blindly rerun.
 Explicit component manifests return the preserved legacy entry without running it.
 `;
-const specs: Record<string, string[]> = { run: ['manifest', 'run-dir'], resume: ['run-dir'], review: ['run-dir', 'evidence'], publish: ['run-dir'], reconcile: ['run-dir'], 'recover-style':['run-dir'], 'revise-style': ['run-dir', 'css', 'expected-fingerprint'], 'revise-header-style': ['run-dir', 'css', 'expected-fingerprint'], 'revise-native-motion': ['run-dir', 'expected-fingerprint'], 'revise-navigation-return': ['run-dir', 'expected-fingerprint'], status: ['run-dir'] };
+const specs: Record<string, string[]> = { run: ['manifest', 'run-dir'], resume: ['run-dir'], review: ['run-dir', 'evidence'], publish: ['run-dir'], reconcile: ['run-dir'], 'rebase-current-draft': ['run-dir', 'expected-fingerprint', 'current-body-hash', 'current-document-hash'], 'recover-style':['run-dir'], 'revise-style': ['run-dir', 'css', 'expected-fingerprint'], 'revise-header-style': ['run-dir', 'css', 'expected-fingerprint'], 'revise-native-motion': ['run-dir', 'expected-fingerprint'], 'revise-layout': ['run-dir', 'plan', 'expected-fingerprint'], 'revise-navigation-return': ['run-dir', 'expected-fingerprint'], status: ['run-dir'] };
 export function parseFullReplicaArguments(args: string[]) {
   if (!args.length || args.includes('--help')) return { command: 'help', flags: {} as Record<string, string> };
   const command = args[0]; if (!Object.hasOwn(specs, command)) throw Error('replica_full_cli_unknown_command');
@@ -42,7 +45,7 @@ export function parseFullReplicaArguments(args: string[]) {
     flags[key] = value;
   }
   if (specs[command].some(key => !Object.hasOwn(flags, key))) throw Error('replica_full_cli_required_argument');
-  if (flags['expected-fingerprint'] && !/^[a-f0-9]{64}$/.test(flags['expected-fingerprint'])) throw Error('replica_full_cli_fingerprint_invalid');
+  if (['expected-fingerprint', 'current-body-hash', 'current-document-hash'].some(key => flags[key] && !/^[a-f0-9]{64}$/.test(flags[key]))) throw Error('replica_full_cli_fingerprint_invalid');
   return { command, flags };
 }
 async function checkedPath(input: string, allowMissingFinal = false): Promise<string> {
@@ -99,7 +102,7 @@ function serializeRemote(deps: FullReplicaDependencies): FullReplicaDependencies
   const one = <Args extends unknown[], Result>(fn: (...args: Args) => Promise<Result>) => async (...args: Args): Promise<Result> => {
     const release = await acquireLock(ROOT); try { return await fn(...args); } finally { await release(); }
   };
-  return { ...deps, provisionHeader: one(deps.provisionHeader.bind(deps)), createPage: one(deps.createPage.bind(deps)), saveBody: one(deps.saveBody.bind(deps)), bindHeader: one(deps.bindHeader.bind(deps)), publishPage: one(deps.publishPage.bind(deps)), ...(deps.reviseStyle ? { reviseStyle: one(deps.reviseStyle.bind(deps)) } : {}), ...(deps.reviseHeaderStyle ? { reviseHeaderStyle: one(deps.reviseHeaderStyle.bind(deps)) } : {}), ...(deps.reviseNativeMotion ? { reviseNativeMotion: one(deps.reviseNativeMotion.bind(deps)) } : {}), ...(deps.reviseNavigationReturn ? { reviseNavigationReturn: one(deps.reviseNavigationReturn.bind(deps)) } : {}) };
+  return { ...deps, provisionHeader: one(deps.provisionHeader.bind(deps)), createPage: one(deps.createPage.bind(deps)), saveBody: one(deps.saveBody.bind(deps)), bindHeader: one(deps.bindHeader.bind(deps)), publishPage: one(deps.publishPage.bind(deps)), ...(deps.reviseStyle ? { reviseStyle: one(deps.reviseStyle.bind(deps)) } : {}), ...(deps.reviseHeaderStyle ? { reviseHeaderStyle: one(deps.reviseHeaderStyle.bind(deps)) } : {}), ...(deps.reviseNativeMotion ? { reviseNativeMotion: one(deps.reviseNativeMotion.bind(deps)) } : {}), ...(deps.reviseLayout ? { reviseLayout: one(deps.reviseLayout.bind(deps)) } : {}), ...(deps.rebaseCurrentDraft ? { rebaseCurrentDraft: one(deps.rebaseCurrentDraft.bind(deps)) } : {}), ...(deps.reviseNavigationReturn ? { reviseNavigationReturn: one(deps.reviseNavigationReturn.bind(deps)) } : {}) };
 }
 export async function runFullReplicaCLI(args: string[], services: FullReplicaCLIServices = realServices): Promise<unknown> {
   const { command, flags } = parseFullReplicaArguments(args);
@@ -119,7 +122,7 @@ export async function runFullReplicaCLI(args: string[], services: FullReplicaCLI
     if (state.manifestHash !== fullReplicaHash(manifest) || state.taskId !== manifest.taskId || state.runId !== manifest.runId) throw Error('replica_full_cli_run_identity_conflict');
     if (command === 'status') return { ...await deliverState(state), authority: 'local-confirmed-checkpoints', remoteWrites: 0 };
     if(command==='recover-style'&&(!state.pending||state.pending.phase!=='body'||state.checkpoints.body||state.checkpoints.bound))throw Error('replica_full_style_recovery_pending_body_required');
-    if (state.pending && !['reconcile','recover-style'].includes(command)) throw Error('replica_full_reconciliation_required');
+    if (state.pending && !['reconcile','recover-style','rebase-current-draft'].includes(command)) throw Error('replica_full_reconciliation_required');
     if (!state.pending && command === 'reconcile') throw Error('replica_full_reconciliation_not_pending');
     if (command === 'publish' && (!state.checkpoints.bound || state.review?.decision !== 'approved')) throw Error('replica_full_review_required');
   }
@@ -142,7 +145,9 @@ export async function runFullReplicaCLI(args: string[], services: FullReplicaCLI
     raw = await services.createDependencies({ root: ROOT, manifestPath: path.join(directory, 'manifest.json'), runDirectory: directory, manifest, ...(command==='recover-style'?{recoverInterruptedStyle:true}:{}) });
     const deps = serializeRemote({ ...wrapFullReplicaDependencies(raw, timing), writeState: next => writeState(directory, next) });
     if (['reconcile','recover-style'].includes(command)) return delivered(await deliverState(await reconcileFullReplica(manifest, deps, state!)));
+    if (command === 'rebase-current-draft') return delivered(await deliverState(await rebaseFullReplicaCurrentDraft(manifest, deps, state!, flags['expected-fingerprint'], flags['current-body-hash'], flags['current-document-hash'])));
     if (command === 'revise-native-motion') return delivered(await deliverState(await reviseFullReplicaNativeMotion(manifest, deps, state!, flags['expected-fingerprint'])));
+    if (command === 'revise-layout') { const file = await checkedPath(flags.plan), info = await lstat(file); if (!info.isFile() || info.size > 64 * 1024) throw Error('replica_full_cli_layout_invalid'); containerTreePlanSchema.parse(await jsonFile(file)); const plan = { path: file, sha256: createHash('sha256').update(await readFile(file)).digest('hex') }; return delivered(await deliverState(await reviseFullReplicaLayout(manifest, deps, state!, plan, flags['expected-fingerprint']))); }
     if (command === 'revise-navigation-return') return delivered(await deliverState(await reviseFullReplicaNavigationReturn(manifest, deps, state!, flags['expected-fingerprint'])));
     if (['revise-style', 'revise-header-style'].includes(command)) { const file = await checkedPath(flags.css), info = await lstat(file); if (!info.isFile() || info.size > 1024 * 1024) throw Error('replica_full_cli_css_invalid'); const css = { path: file, sha256: createHash('sha256').update(await readFile(file)).digest('hex') }, revise = command === 'revise-header-style' ? reviseFullReplicaHeaderStyle : reviseFullReplicaStyle; return delivered(await deliverState(await revise(manifest, deps, state!, css, flags['expected-fingerprint']))); }
     const reviewInput = command === 'review' ? await jsonFile(flags.evidence) : undefined;

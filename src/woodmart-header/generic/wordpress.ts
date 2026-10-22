@@ -7,6 +7,7 @@ import type { NativeHeaderContract, ResolvedHeaderResources } from './compiler.j
 import { compileHeaderMenuContent, prepareHeaderMenuContentLocal, type HeaderMenuContent, type HeaderMenuContentClient, type HeaderMenuContentPayload } from './menu-content.js';
 import { assertNative44Compilation } from '../../native44/compiler.js';
 import type { Native44Compiled } from '../../native44/types.js';
+import type { ImportedAssetV2 } from '../../replica-v2/types.js';
 
 export interface HeaderModuleIdentity { moduleKey: string; owner: HeaderOwner; targetOrigin: string; headerId: string }
 export interface HeaderPageObservation { pageId: number; postType: string; status: string; template: string; runId: string; bodyHash: string; headerId: string | null; snapshotHash: string }
@@ -38,7 +39,7 @@ export interface HeaderInspection { contract: NativeHeaderContract; resources: R
 export type HeaderModuleInspection = HeaderInspection;
 export interface HeaderMutationResponse { snapshot: HeaderRemoteSnapshot; hash: string; result?: unknown }
 export interface HeaderModuleDriver {
-  prepareMenuContent?(identity: HeaderModuleIdentity, entries: HeaderMenuContent[], directory: string): Promise<HeaderMenuContentPayload[]>;
+  prepareMenuContent?(identity: HeaderModuleIdentity, entries: HeaderMenuContent[], directory: string, imported?: ImportedAssetV2[]): Promise<HeaderMenuContentPayload[]>;
   inspect(identity: HeaderModuleIdentity, mediaIds?: Record<string, number>, pageId?: number): Promise<HeaderInspection>;
   mutate(identity: HeaderModuleIdentity, request: HeaderMutationRequest, intent: HeaderPHPWriteIntent): Promise<HeaderMutationResponse>;
 }
@@ -61,11 +62,11 @@ export class WordPressHeaderModuleDriver implements HeaderModuleDriver {
     if (!hash.test(contract.fingerprint)) fail('menu_content_contract_invalid');
     return contract;
   }
-  async prepareMenuContent(identity: HeaderModuleIdentity, entries: HeaderMenuContent[], directory: string): Promise<HeaderMenuContentPayload[]> {
+  async prepareMenuContent(identity: HeaderModuleIdentity, entries: HeaderMenuContent[], directory: string, imported?: ImportedAssetV2[]): Promise<HeaderMenuContentPayload[]> {
     await prepareHeaderMenuContentLocal(entries);
     if (!this.contentClient) fail('menu_content_client_required');
     const contract = await this.inspectMenuContentContract(identity);
-    const prepared = await compileHeaderMenuContent(entries, this.contentClient, identity.targetOrigin, contract.fingerprint, directory);
+    const prepared = await compileHeaderMenuContent(entries, this.contentClient, identity.targetOrigin, contract.fingerprint, directory, imported);
     for (const { payload, compiled } of prepared) this.contentProofs.set(payload.key, { compiled, identityHash: headerJsonHash(identity), payloadHash: headerJsonHash(payload) });
     return prepared.map(item => item.payload);
   }

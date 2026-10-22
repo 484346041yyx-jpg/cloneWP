@@ -7,6 +7,9 @@ import { compileHeaderModuleStyles } from './styles.js';
 import { withHeaderBundleLock, saveHeaderBundleState, persistHeaderIntent, type HeaderBundle, type HeaderPendingIntent } from './bundle.js';
 import type { HeaderModuleDriver, HeaderRemoteSnapshot, HeaderModuleInspection } from './wordpress.js';
 import { prepareHeaderMenuContentLocal,assertHeaderMenuRetirement } from './menu-content.js';
+import type { ImportedAssetV2 } from '../../replica-v2/types.js';
+import { compileSimpleDropdownCSS } from './simple-dropdown.js';
+import { compileHeaderHoverCSS } from './hover-effects.js';
 
 export type HeaderModuleAction = 'reserve' | 'menu' | 'menu-content' | 'style' | 'header' | 'create-page' | 'bind';
 export interface HeaderModuleOperationResult {
@@ -29,13 +32,19 @@ function same(a: unknown, b: unknown): boolean { return hash(a) === hash(b); }
 export function compileBundleStyles(bundle: HeaderBundle): string {
   const wrapper = headerModuleElementId(bundle.plan.moduleKey, 'module-styles');
   const parts=splitResponsiveHeaderStyles(bundle.plan.style.css);
+  const module=(bundle.state.confirmed?.snapshot as HeaderRemoteSnapshot|undefined)?.module;
+  const menus=bundle.plan.menus??[];
+  const dropdownIds:Record<string,Record<string,number>>={};
+  for(const menu of menus)if(menu.dropdowns?.length&&module?.menus[menu.key])dropdownIds[menu.key]=Object.fromEntries(module.menus[menu.key].items.map(item=>[item.key,item.id]));
+  const dropdownCSS=module&&menus.every(menu=>!menu.dropdowns?.length||module.menus[menu.key])?compileSimpleDropdownCSS(menus,dropdownIds):'';
+  const hoverCSS=compileHeaderHoverCSS(bundle.plan,key=>headerModuleElementId(bundle.plan.moduleKey,key));
   const compiled=compileHeaderModuleStyles({
     ...bundle.plan.style,
-    css: `${parts.headerCSS}${bundle.plan.layout.mobile ? '\n' + adaptiveHeaderCSS(bundle.plan) : ''}\n:header .whb-${wrapper}{display:contents}`,
+    css: `${parts.headerCSS}${bundle.plan.layout.mobile ? '\n' + adaptiveHeaderCSS(bundle.plan) : ''}\n${dropdownCSS}\n${hoverCSS}\n:header .whb-${wrapper}{display:contents}`,
   }, bundle.state.identity).css;
   const environment=adaptiveHeaderEnvironmentCSS(bundle.plan,bundle.state.identity.headerId);
   if(!parts.menuCSS)return compiled+environment;
-  const module=(bundle.state.confirmed?.snapshot as HeaderRemoteSnapshot|undefined)?.module,pages=Object.values(module?.pages??{}),page=pages[0];
+  const pages=Object.values(module?.pages??{}),page=pages[0];
   if(!bundle.plan.layout.mobile||pages.length!==1||!module||!same(module.identity,bundle.state.identity)||!page||page.runId!==bundle.state.identity.owner.runId||page.postType!=='page'||page.template!=='elementor_header_footer'||page.headerId!==bundle.state.identity.headerId)fail('header_menu_override_owned_bound_page_required');
   return compiled+environment+responsiveHeaderPageCSS({...bundle.plan,layout:{...bundle.plan.layout,mobile:{...bundle.plan.layout.mobile,menuCSS:parts.menuCSS}}},page.pageId,bundle.state.identity.headerId);
 }
@@ -66,7 +75,7 @@ function expectedMenu(bundle: HeaderBundle, payload: unknown): unknown {
 }
 function menuPayload(bundle: HeaderBundle, menu: HeaderBundle['plan']['menus'][number]): unknown {
   const images = bundle.plan.menuItemMedia?.filter(binding => binding.menuKey === menu.key).map(binding => { const mediaId = bundle.mediaIds[binding.mediaKey]; if (!Number.isSafeInteger(mediaId) || mediaId < 1) fail('menu_media_unresolved'); return { itemKey: binding.itemKey, mediaId }; });
-  return { ...menu, items: orderHeaderMenuItems(menu.items, bundle.plan.targetOrigin), ...(images ? { images } : {}) };
+  return { key: menu.key, name: menu.name, items: orderHeaderMenuItems(menu.items, bundle.plan.targetOrigin), ...(images ? { images } : {}) };
 }
 function matchesDesired(bundle: HeaderBundle, pending: HeaderPendingIntent, snapshot: HeaderRemoteSnapshot): boolean {
   const module = snapshot.module, payload = pending.payload;
@@ -192,14 +201,14 @@ export async function inspectHeaderModule(directory: string, driver: HeaderModul
 }
 
 /** Each confirmed step is durable; partial/unknown creation never starts again. */
-export async function provisionHeaderModule(directory: string, driver: HeaderModuleDriver): Promise<HeaderModuleOperationResult[]> {
+export async function provisionHeaderModule(directory: string, driver: HeaderModuleDriver, imported?: ImportedAssetV2[]): Promise<HeaderModuleOperationResult[]> {
   return withHeaderBundleLock(directory, async bundle => {
     compileBundleStyles(bundle); // Pure validation before any remote allocation.
     if (bundle.plan.menuContent) await prepareHeaderMenuContentLocal(bundle.plan.menuContent);
     let observed = await inspect(bundle, driver); checkCurrentBase(bundle, observed);
     preflightNativePlan(bundle, observed);
     bundle.plan.menus.forEach(menu => menuPayload(bundle, menu));
-    const content = bundle.plan.menuContent ? await (driver.prepareMenuContent ? driver.prepareMenuContent(bundle.state.identity, bundle.plan.menuContent, bundle.directory) : Promise.reject(Error('woodmart_header_service_menu_content_adapter_required'))) : [];
+    const content = bundle.plan.menuContent ? await (driver.prepareMenuContent ? driver.prepareMenuContent(bundle.state.identity, bundle.plan.menuContent, bundle.directory, imported) : Promise.reject(Error('woodmart_header_service_menu_content_adapter_required'))) : [];
     const results: HeaderModuleOperationResult[] = [];
     const step = async (action: HeaderModuleAction, payload: unknown): Promise<boolean> => {
       const result = await submit(bundle, driver, observed, action, payload); results.push(result);

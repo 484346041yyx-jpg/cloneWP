@@ -31,7 +31,7 @@ const MAX_NODES = 50_000;
 const MAX_AT_RULE_DEPTH = 8;
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const FONT_KEY = /^[a-z][a-z0-9-]{0,31}$/;
-const FORBIDDEN_PROPERTIES = new Set(['content', 'behavior', '-ms-behavior', '-moz-binding']);
+const FORBIDDEN_PROPERTIES = new Set(['behavior', '-ms-behavior', '-moz-binding']);
 
 function fail(message: string): never {
   throw new Error(`Header module CSS: ${message}`);
@@ -70,9 +70,10 @@ function validateFonts(fonts: HeaderModuleFont[], identity: HeaderModuleStyleIde
   return families;
 }
 
-function validateDeclaration(node: csstree.Declaration, knownFonts: ReadonlySet<string>): void {
+function validateDeclaration(node: csstree.Declaration, knownFonts: ReadonlySet<string>, allowEmptyPseudoContent = false): void {
   const property = decodedIdentifier(node.property);
-  if (FORBIDDEN_PROPERTIES.has(property) || /^(?:-\w+-)?content$/.test(property)) fail(`property ${property} is forbidden`);
+  if (property === 'content' && (!allowEmptyPseudoContent || csstree.generate(node.value) !== '""')) fail('property content is forbidden');
+  if (FORBIDDEN_PROPERTIES.has(property) || (property !== 'content' && /^(?:-\w+-)?content$/.test(property))) fail(`property ${property} is forbidden`);
   if (property.startsWith('--header-font-')) fail('generated font variables cannot be overridden');
   if (node.value.type !== 'Value') fail('unparsed declaration values are forbidden');
   csstree.walk(node.value, child => {
@@ -179,10 +180,16 @@ export function compileHeaderModuleStyles(input: HeaderModuleStyleInput, identit
         return;
       }
       if (node.type !== 'Rule' || node.prelude?.type !== 'SelectorList') fail('only header style rules are allowed');
+      const selectors = node.prelude.children.toArray();
+      const emptyPseudoContent = selectors.every(selector => {
+        if (selector.type !== 'Selector') return false;
+        const last = selector.children.last;
+        return last?.type === 'PseudoElementSelector' && ['before', 'after'].includes(decodedIdentifier(last.name));
+      });
       node.prelude.children.forEach(selector => scopeSelector(selector, rootClass));
       node.block.children.forEach(child => {
         if (child.type !== 'Declaration') fail('nested rules and at-rules are forbidden within style rules');
-        validateDeclaration(child, knownFonts);
+        validateDeclaration(child, knownFonts, emptyPseudoContent);
       });
     });
   }

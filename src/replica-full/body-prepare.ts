@@ -17,7 +17,9 @@ import { assertNavigationFormSource } from './navigation-form-source.js';
 import { assertNativeImageCSS } from './native-image-policy.js';
 import { prepareResponsiveBody, compileResponsiveBody } from '../replica-responsive/body.js';
 import { verifyResponsiveSections } from '../replica-responsive/source.js';
+import { verifyPhoneMotionSource } from '../replica-responsive/motion-review.js';
 import { assertCarouselNavigationMapped } from './carousel-navigation.js';
+import { assertHeaderContentWidthMapped } from './header-visual-width.js';
 
 const ROOT = 'D:/cloneWP';
 const refSchema = z.object({ path: z.string().min(1).max(4096), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -74,7 +76,13 @@ function under(nodes: ObservationPacketV2['nodes'], child: string, owner: string
   while (cursor && !seen.has(cursor)) { if (cursor === owner) return true; seen.add(cursor); cursor = nodes[cursor]?.parentId ?? null; } return false;
 }
 function headerNodes(packet: ObservationPacketV2): Set<string> {
-  const roots = new Set(packet.regions.filter(region => /^(?:header|banner|site-header|main-header)$/i.test(region.role.trim())).map(region => region.nodeId));
+  const roots = new Set(packet.regions.filter(region => {
+    if (!/^(?:header|banner|site-header|main-header)$/i.test(region.role.trim())) return false;
+    const node = packet.nodes[region.nodeId];
+    return /(?:^|[-_])(?:header|banner|nav)(?:$|[-_])/i.test(region.id) ||
+      node?.tag.toLowerCase() === 'header' || node?.attributes.role?.toLowerCase() === 'banner' ||
+      /(?:^|[-_])(?:header|banner)(?:$|[-_])/i.test(node?.attributes.class ?? '');
+  }).map(region => region.nodeId));
   const inContent = (id: string): boolean => { let cursor = packet.nodes[id]?.parentId; const seen = new Set<string>(); while (cursor && !seen.has(cursor)) { seen.add(cursor); const node = packet.nodes[cursor]; if (!node) break; if (['main', 'article'].includes(node.tag.toLowerCase()) || node.attributes.role === 'main') return true; cursor = node.parentId; } return false; };
   for (const node of Object.values(packet.nodes)) if (!inContent(node.id) && (node.tag.toLowerCase() === 'header' || node.attributes.role?.toLowerCase() === 'banner')) roots.add(node.id);
   const forbidden = new Set<string>();
@@ -115,6 +123,7 @@ export async function prepareActualBody(input: FullReplicaManifest): Promise<Ful
   const manifest = validateFullReplicaManifest(input);
   const [programFile, cssFile, unitsFile, evidenceFile] = await Promise.all([jsonAt(manifest.body.program), bytesAt(manifest.body.css), jsonAt(manifest.body.sourceUnits), jsonAt(manifest.sourceEvidence)]);
   let program = validateNative44Program(programFile.value); const programBase = path.dirname(programFile.filename);
+  if (manifest.version === 4 && program.visualAuditVersion !== 3) fail('phone_visual_audit_required');
   assertNativeImageCSS(manifest.nativeImagePolicy, program, cssFile.bytes.toString('utf8'));
   for (const exception of manifest.nativeImagePolicy?.cssExceptions ?? []) for (const ref of exception.evidence) await bytesAt(ref, programBase);
   if (program.taskId !== manifest.taskId || program.sourceUrl !== manifest.sourceUrl) fail('program_identity');
@@ -152,6 +161,7 @@ export async function prepareActualBody(input: FullReplicaManifest): Promise<Ful
   }
   const headerBySnapshot = new Map([...snapshots].map(([id, packet]) => [id, headerNodes(packet)]));
   if ([...headerBySnapshot.values()].some(nodes => !nodes.size)) fail('header_owner_unproven');
+  if (program.visualAuditVersion && manifest.header?.plan) assertHeaderContentWidthMapped([...snapshots.values()], manifest.header.plan.style.css);
   const headerUnits = new Set(manifest.sourcePartition.headerUnits), components = walkNative44(program.blocks), componentMap = new Map(components.map(node => [node.key, node]));
   const actualMapping = new Map(sourceUnits.units.map(unit => [unit.id, new Set<string>()]));
   for (const unit of sourceUnits.units) {
@@ -188,10 +198,11 @@ export async function prepareActualBody(input: FullReplicaManifest): Promise<Ful
   let phonePackets: ObservationPacketV2[] | undefined;
   if (manifest.responsive) {
     phonePackets = await verifyResponsiveSections(manifest.responsive, manifest, bytesAt);
+    if (manifest.version === 4) await verifyPhoneMotionSource({ taskId: manifest.taskId, sourceUrl: manifest.sourceUrl, plan: manifest.responsive, program, packets: phonePackets, read: bytesAt });
     const responsive = prepareResponsiveBody(program, manifest.responsive, effectiveCSS); program = responsive.program; effectiveCSS = responsive.css;
     assertNativeImageCSS(manifest.nativeImagePolicy, program, effectiveCSS);
   }
-  if (manifest.version === 3) assertCarouselNavigationMapped({ program, sourceUnits, snapshots, css: effectiveCSS,
+  if (manifest.version >= 3) assertCarouselNavigationMapped({ program, sourceUnits, snapshots, css: effectiveCSS,
     ...(phonePackets && manifest.responsive ? { phone: { packets: phonePackets, sections: manifest.responsive.sections } } : {}) });
   const knowledge = await loadNative44Knowledge(usedNative44WidgetTypes(program));
   const payload: ActualBodyPayload = { ...(manifest.responsive ? { baseProgram } : {}), program, css: effectiveCSS, sourceUnits, sourceEvidence, sourceFacts, knowledge, manifest, programPath: programFile.filename, sourceFactsPath: factsFile.filename, assetsManifestPath: assetsFile.filename, assetsManifest: assetsFile.value };

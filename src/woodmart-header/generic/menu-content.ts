@@ -14,7 +14,7 @@ import type { WordPressClient } from '../../wordpress/client.js';
 import type {ImportedAssetV2,FileRef} from '../../replica-v2/types.js';
 import {headerDropdownSchema,compileHeaderDropdown,type HeaderDropdownSettings} from './dropdown.js';
 
-export interface HeaderMenuContent { key: string; name: string; menuKey: string; itemKey: string; program: Native44Program; version?:2; dropdown?:HeaderDropdownSettings; assets?:FileRef; retireChildren?:string[] }
+export interface HeaderMenuContent { key: string; name: string; menuKey: string; itemKey: string; program: Native44Program; version?:2; dropdown?:HeaderDropdownSettings; assets?:FileRef; assetSource?:'header-assets'; retireChildren?:string[] }
 export interface HeaderMenuContentPayload {
   key: string; name: string; menuKey: string; itemKey: string; programHash: string; contractFingerprint: string;
   elements: Native44Compiled['composition']['elements']; settings: Native44Compiled['composition']['pageSettings'];
@@ -33,7 +33,7 @@ export function assertHeaderMenuRetirement(items:Array<{key:string;parentKey:str
   descendants.delete(owner);
   if(new Set(retired).size!==retired.length||retired.length!==descendants.size||retired.some(k=>!descendants.has(k)))fail('retirement_exact_branch_required');
 }
-const entrySchema = z.object({ key: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,79}$/), name: z.string().trim().min(1).max(200), menuKey: z.string(), itemKey: z.string(), program: z.unknown(),version:z.literal(2).optional(),dropdown:headerDropdownSchema.optional(),assets:z.object({path:z.string(),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict().optional(),retireChildren:z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/)).min(1).max(199).optional() }).strict();
+const entrySchema = z.object({ key: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,79}$/), name: z.string().trim().min(1).max(200), menuKey: z.string(), itemKey: z.string(), program: z.unknown(),version:z.literal(2).optional(),dropdown:headerDropdownSchema.optional(),assets:z.object({path:z.string(),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict().optional(),assetSource:z.literal('header-assets').optional(),retireChildren:z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/)).min(1).max(199).optional() }).strict();
 
 /** v1 deliberately reuses existing native containers, static navigation and wd_products only. */
 export function validateHeaderMenuContent(input: unknown, menus: HeaderModuleMenu[], runId: string): HeaderMenuContent[] {
@@ -43,11 +43,12 @@ export function validateHeaderMenuContent(input: unknown, menus: HeaderModuleMen
     if (!owner || menu!.items.some(item => item.parentKey === owner.key) || keys.has(entry.key) || bindings.has(binding)) fail('leaf_binding_required');
     keys.add(entry.key); bindings.add(binding);
     const mega=entry.version===2;
-    if(mega?!entry.dropdown:entry.dropdown!==undefined||entry.assets!==undefined||entry.retireChildren!==undefined)fail('content_version_contract');
+    if(mega?!entry.dropdown:entry.dropdown!==undefined||entry.assets!==undefined||entry.assetSource!==undefined||entry.retireChildren!==undefined)fail('content_version_contract');
+    if(entry.assets&&entry.assetSource)fail('media_source_conflict');
     if(entry.retireChildren&&(new Set(entry.retireChildren).size!==entry.retireChildren.length||entry.retireChildren.some(k=>k===entry.itemKey||menu!.items.some(i=>i.key===k))))fail('retired_children_must_be_absent_from_desired_menu');
     const program = validateNative44Program(entry.program), nodes = walkNative44(program.blocks);
     if (program.taskId !== runId || program.replicationProfile !== 'desktop-browser-v1' || !mega&&referencedNative44Assets(program).size || nodes.length > 500) fail('program_scope_invalid');
-    if(mega&&referencedNative44Assets(program).size&&!entry.assets)fail('mega_media_ledger_required');
+    if(mega&&referencedNative44Assets(program).size&&!entry.assets&&!entry.assetSource)fail('mega_media_ledger_required');
     if (!mega&&!nodes.some(node => node.kind === 'native-products')) fail('products_required');
     for (const node of nodes) {
       if (node.kind === 'composite') continue;
@@ -97,16 +98,17 @@ export async function prepareHeaderMenuContentLocal(entries: HeaderMenuContent[]
   }
 }
 
-async function readMenuAssets(entry:HeaderMenuContent):Promise<ImportedAssetV2[]>{
-  const value=entry.assets?await readBound(entry.assets):[];
+async function readMenuAssets(entry:HeaderMenuContent, imported?:ImportedAssetV2[]):Promise<ImportedAssetV2[]>{
+  const wanted=referencedNative44Assets(entry.program);
+  const value=entry.assetSource?imported?.filter(asset=>wanted.has(asset.key)):entry.assets?await readBound(entry.assets):[];
   if(!Array.isArray(value)||value.length>100)fail('media_ledger_invalid');
-  const wanted=referencedNative44Assets(entry.program),seen=new Set<string>();
+  const seen=new Set<string>();
   for(const a of value){if(!a||typeof a.key!=='string'||seen.has(a.key)||!wanted.has(a.key)||!Number.isSafeInteger(a.attachmentId)||a.attachmentId<1||!/^[a-f0-9]{64}$/.test(a.sha256)||typeof a.url!=='string')fail('media_ledger_invalid');seen.add(a.key);const u=new URL(a.url);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash)fail('media_url_invalid');}
   if(seen.size!==wanted.size)fail('media_ledger_incomplete');return value;
 }
 
 /** Exact compiler objects stay in memory; serialized elements never authorize a write. */
-export async function compileHeaderMenuContent(entries: HeaderMenuContent[], client: HeaderMenuContentClient, targetOrigin: string, contractFingerprint: string, directory: string): Promise<Array<{ payload: HeaderMenuContentPayload; compiled: Native44Compiled }>> {
+export async function compileHeaderMenuContent(entries: HeaderMenuContent[], client: HeaderMenuContentClient, targetOrigin: string, contractFingerprint: string, directory: string, imported?:ImportedAssetV2[]): Promise<Array<{ payload: HeaderMenuContentPayload; compiled: Native44Compiled }>> {
   await prepareHeaderMenuContentLocal(entries);
   const types = [...new Set(entries.flatMap(entry => usedNative44WidgetTypes(entry.program)))];
   const capabilities = await client.discoverCapabilities(types), needsCatalog=entries.some(e=>walkNative44(e.program.blocks).some(n=>n.kind==='native-products'));
@@ -121,7 +123,7 @@ export async function compileHeaderMenuContent(entries: HeaderMenuContent[], cli
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; const info = await lstat(evidence); if (!info.isFile() || info.isSymbolicLink() || (await realpath(evidence)).toLowerCase() !== evidence.toLowerCase() || sha(await readFile(evidence)) !== sha(bytes)) fail('evidence_changed'); }
   const knowledge = await loadNative44Knowledge(types);
   return Promise.all(entries.map(async entry => {
-    const assets=await readMenuAssets(entry);if(assets.some(a=>new URL(a.url).origin!==targetOrigin))fail('media_origin_invalid');
+    const assets=await readMenuAssets(entry, imported);if(assets.some(a=>new URL(a.url).origin!==targetOrigin))fail('media_origin_invalid');
     const compiled = compileNative44(entry.program, { schemas: capabilities.legacySchemas, assets, targetOrigin, ...(observed?{catalog:{targetOrigin,products:observed.products,evidence:[evidence]}}:{}), knowledge: toNative44CompilerKnowledge(knowledge, capabilities.legacySchemas) });
     assertNative44Compilation(compiled, compiled.composition);
     return { compiled, payload: { key: entry.key, name: entry.name, menuKey: entry.menuKey, itemKey: entry.itemKey, programHash: headerJsonHash(entry.program), contractFingerprint, elements: compiled.composition.elements, settings: compiled.composition.pageSettings, queries: compiled.queryReceipts,...(entry.version===2?{version:2 as const,dropdown:compileHeaderDropdown(entry.dropdown!),media:assets,...(entry.retireChildren?{retireChildren:entry.retireChildren}:{})}:{}) } };

@@ -46,7 +46,8 @@ export async function verifyResponsiveSections(plan: ResponsivePlan, identity: {
     for (const treatment of section.touch ?? []) for (const view of plan.viewports) {
       const matches = treatment.sourceOwners.filter(owner => packets.some(packet => packet.snapshot.id === owner.snapshotId && packet.snapshot.viewport.width === view.width && packet.snapshot.viewport.height === view.height && packet.nodes[owner.nodeId]));
       if (matches.length !== 1) fail('touch_source_phone_owner');
-      const selected = matches[0], packet = packets.find(item => item.snapshot.id === selected.snapshotId)!;
+      const selected = matches[0], packet = packets.find(item => item.snapshot.id === selected.snapshotId && item.nodes[selected.nodeId]);
+      if (!packet) fail('touch_source_phone_owner');
       const sectionOwners = new Set(section.evidence.filter(item => item.snapshotId === selected.snapshotId).map(item => item.nodeId));
       let node = packet.nodes[selected.nodeId]; const seen = new Set<string>(); let contained = false;
       while (node) {

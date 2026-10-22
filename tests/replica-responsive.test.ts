@@ -153,8 +153,10 @@ test('phone text utilities coexist with one native panel menu and cannot overrid
 });
 
 test('target breakpoint drift is a read-only failure before creating resources', async () => {
-  const transport = (mobile: number) => ({ readPHP: async () => ({ ok: true, mobile, tablet: 1024, woodmart: '8.3.4', mobileOptimization: false, visibility: Object.fromEntries(['desktop','tablet','mobile'].map(k => ['hide_'+k,{type:'switcher',return_value:'hidden-'+k}])) }) }) as any;
-  await assertResponsiveTarget(transport(768)); await assert.rejects(assertResponsiveTarget(transport(880)), /unverified/);
+  const transport = (mobile: number, woodmart = '8.3.4') => ({ readPHP: async () => ({ ok: true, mobile, tablet: 1024, woodmart, mobileOptimization: false, visibility: Object.fromEntries(['desktop','tablet','mobile'].map(k => ['hide_'+k,{type:'switcher',return_value:'hidden-'+k}])) }) }) as any;
+  await assertResponsiveTarget(transport(768)); await assertResponsiveTarget(transport(768, '8.5.5'));
+  await assert.rejects(assertResponsiveTarget(transport(880)), /unverified/);
+  await assert.rejects(assertResponsiveTarget(transport(768, '9.0.0')), /unverified/);
 });
 test('existing preparation entry upgrades to version 2 and merges phone plans in the same job/result lifecycle', async () => {
   const f = await bodyFixture(); try {

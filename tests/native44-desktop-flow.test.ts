@@ -154,6 +154,18 @@ test('user tab evidence binds actual entities, pixels, URL, two desktop geometri
     const segmented = structuredClone(binding), capture = segmented.browserObservation.captures[0], snapshot = observation.packets[0].snapshot;
     capture.captureMode = 'viewport-segments'; capture.segments = [{ screenshot: { path: snapshot.screenshot.path, sha256: snapshot.screenshot.sha256 }, documentTop: 0, documentHeight: snapshot.pageHeight, cropTop: 0, before: structuredClone(capture.before), after: structuredClone(capture.after) }];
     validateNative44BrowserObservation(segmented, observation, sourceUrl); await verifyNative44BrowserSegmentPixels(segmented, directory, observation);
+    const split = 300, full = await readFile(path.join(directory, snapshot.screenshot.path));
+    const top = await sharp(full).extract({ left: 0, top: 0, width: snapshot.viewport.width, height: split }).png().toBuffer();
+    const bottom = await sharp(full).extract({ left: 0, top: split, width: snapshot.viewport.width, height: snapshot.pageHeight - split }).png().toBuffer();
+    await writeFile(path.join(directory, 'top-strip.png'), top); await writeFile(path.join(directory, 'bottom-strip.png'), bottom);
+    const strips = structuredClone(segmented), stripCapture = strips.browserObservation.captures[0];
+    stripCapture.segments = [
+      { screenshot: { path: 'top-strip.png', sha256: sha256(top) }, screenshotTop: 0, documentTop: 0, documentHeight: split, cropTop: 0, before: structuredClone(capture.before), after: structuredClone(capture.after) },
+      { screenshot: { path: 'bottom-strip.png', sha256: sha256(bottom) }, screenshotTop: split, documentTop: split, documentHeight: snapshot.pageHeight - split, cropTop: 0, before: structuredClone(capture.before), after: structuredClone(capture.after) },
+    ];
+    validateNative44BrowserObservation(strips, observation, sourceUrl); await verifyNative44BrowserSegmentPixels(strips, directory, observation);
+    stripCapture.segments[1].screenshotTop = split + 1;
+    assert.throws(() => validateNative44BrowserObservation(strips, observation, sourceUrl), /incomplete actual coverage/);
     capture.segments[0].screenshot.sha256 = '0'.repeat(64); await assert.rejects(() => verifyNative44BrowserSegmentPixels(segmented, directory, observation), /hash changed/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

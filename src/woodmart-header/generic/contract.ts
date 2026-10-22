@@ -1,6 +1,8 @@
 import { headerJsonHash, canonicalHeaderJson, headerTargetOrigin, validateHeaderMenuItems, type HeaderJson, type HeaderMenuItem, type HeaderOwner } from '../contract.js';
 import { validateResponsiveHeaderPlan, type ResponsiveHeader } from '../../replica-responsive/header.js';
 import { validateHeaderMenuContent, type HeaderMenuContent } from './menu-content.js';
+import { validateSimpleDropdowns, type SimpleDropdownPresentation } from './simple-dropdown.js';
+import { validateHeaderHoverEffects, type HeaderMenuHoverEffect } from './hover-effects.js';
 
 /** An opt-in header module is independent of an Elementor body or page binding. */
 export type HeaderRowSlot = 'top-bar' | 'general-header' | 'header-bottom';
@@ -11,6 +13,7 @@ export interface HeaderModuleElement {
   type: HeaderModuleElementType;
   params: Record<string, HeaderJson>;
   menuKey?: string;
+  hoverEffects?: HeaderMenuHoverEffect[];
 }
 export interface HeaderModuleRow {
   slot: HeaderRowSlot;
@@ -19,7 +22,7 @@ export interface HeaderModuleRow {
 }
 export interface HeaderModuleFont { key: string; url: string; weight: number; style: 'normal' | 'italic' }
 export interface HeaderModuleStyle { css: string; fonts: HeaderModuleFont[] }
-export interface HeaderModuleMenu { key: string; name: string; items: HeaderMenuItem[] }
+export interface HeaderModuleMenu { key: string; name: string; items: HeaderMenuItem[]; dropdowns?: SimpleDropdownPresentation[] }
 export interface HeaderModulePlan {
   kind: 'clonewp-header-module';
   version: 1;
@@ -76,11 +79,12 @@ export function validateHeaderModulePlan(input: unknown): HeaderModulePlan {
   const menuKeys = new Set<string>(), menuNames = new Set<string>();
   for (const menu of value.menus) {
     if (!object(menu)) fail('menu_invalid');
-    exact(menu, ['key', 'name', 'items']);
+    exact(menu, ['key', 'name', 'items'], ['dropdowns']);
     if (!key(menu.key) || menuKeys.has(menu.key) || !text(menu.name, 100) || menuNames.has(menu.name.normalize('NFKC').toLowerCase())) fail('menu_invalid');
     menuKeys.add(menu.key);
     menuNames.add(menu.name.normalize('NFKC').toLowerCase());
     menu.items = validateHeaderMenuItems(menu.items, origin);
+    validateSimpleDropdowns(menu as unknown as HeaderModuleMenu);
   }
   if (Object.hasOwn(value, 'menuContent')) value.menuContent = validateHeaderMenuContent(value.menuContent, value.menus as unknown as HeaderModuleMenu[], value.owner.runId as string);
   if (Object.hasOwn(value, 'menuItemMedia')) {
@@ -108,13 +112,14 @@ export function validateHeaderModulePlan(input: unknown): HeaderModulePlan {
       if (!Array.isArray(column) || column.length > 100) fail('column_invalid');
       for (const element of column) {
         if (!object(element)) fail('element_invalid');
-        exact(element, ['key', 'type', 'params'], ['menuKey']);
+        exact(element, ['key', 'type', 'params'], ['menuKey', 'hoverEffects']);
         if (!key(element.key) || elementKeys.has(element.key) || elementKeys.size >= 100 || !types.has(element.type as HeaderModuleElementType)) fail('element_invalid');
         elementKeys.add(element.key); params(element.params);
         if (Object.hasOwn(element.params, 'menu_id')) fail('raw_menu_binding_forbidden');
         if (element.type === 'mainmenu') {
           if (!key(element.menuKey) || !menuKeys.has(element.menuKey)) fail('menu_binding_missing');
         } else if (Object.hasOwn(element, 'menuKey')) fail('unexpected_menu_binding');
+        validateHeaderHoverEffects(element as unknown as HeaderModuleElement, (value.menus as unknown as HeaderModuleMenu[]).find(menu => menu.key === element.menuKey));
       }
     }
   }

@@ -8,8 +8,8 @@ import type { HeaderModuleIdentity } from '../src/woodmart-header/generic/wordpr
 import type { HeaderPHPReadOperation, HeaderPHPMutationOperation } from '../src/woodmart-header/transport.js';
 
 const originalClosure = '$pageObservation=static function($pid)use($digest){', normalizedClosure = '$pageObservation=static function($pid)use($digest,$ownerToken,$owner){';
-const added = "\n    if(get_post_meta($pid,'_clonewp_header_module_owner',true)===$ownerToken&&get_post_meta($pid,'_clonewp_run_id',true)===($owner['runId']??null))foreach(['_elementor_page_assets','_elementor_controls_usage'] as $key)unset($meta[$key]);";
-const exclusion = "foreach(['_edit_lock','_edit_last','_elementor_element_cache','_elementor_css','wd_page_css_files','wd_page_css_files_mobile'] as $key)unset($meta[$key]);";
+const added = "\n    if(get_post_meta($pid,'_clonewp_header_module_owner',true)===$ownerToken&&get_post_meta($pid,'_clonewp_run_id',true)===($owner['runId']??null))foreach(['_elementor_controls_usage'] as $key)unset($meta[$key]);";
+const exclusion = "foreach(['_edit_lock','_edit_last','_elementor_element_cache','_elementor_css','_elementor_page_assets','wd_page_css_files','wd_page_css_files_mobile'] as $key)unset($meta[$key]);";
 const identity: HeaderModuleIdentity = { moduleKey: 'alder-native-helper', owner: { ownerId: 'clonewp', runId: 'alder-native-run' }, targetOrigin: 'https://target.example', headerId: 'header_12345' }, hash = 'a'.repeat(64);
 
 test('full helper normalization changes only owned-page derived caches, preserving all protected resources and guards exactly', async () => {

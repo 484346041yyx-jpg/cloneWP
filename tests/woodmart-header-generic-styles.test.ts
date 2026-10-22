@@ -41,6 +41,16 @@ test('HTML breakout, legacy script CSS, global definitions and fake navigation l
   ]) assert.throws(() => compile(css), /Header module CSS/, css);
 });
 
+test('empty decorative pseudo-elements are allowed without permitting CSS text labels', () => {
+  assert.equal(compile(':header .nav-link-text::after{content:"";opacity:0}').css, '.whb-header_123 .nav-link-text::after{content:"";opacity:0}');
+  for (const css of [
+    ':header a{content:""}',
+    ':header a::after,:header a{content:""}',
+    ':header a::after{content:"Sale"}',
+    ':header a::after{content:attr(title)}',
+  ]) assert.throws(() => compile(css), /property content is forbidden/, css);
+});
+
 test('CSS asset URLs and font URLs require HTTPS without embedded credentials', () => {
   assert.match(compile(':header{background:url("https://cdn.example.com/header.png")}').css, /cdn\.example\.com/);
   for (const url of ['javascript:alert(1)', 'data:image/png;base64,abc', 'http://example.com/x', 'https://user:pass@example.com/x', '//example.com/x', '/x', 'https://example.com/<x']) {

@@ -19,6 +19,7 @@ export function validateResponsiveHeaderPlan(value: HeaderModulePlan, validateBa
   for (const row of presentation.layout.rows) {
     if (Object.keys(row.params).some(k => k !== 'mobile_height')) fail('header_shared_row_setting');
     for (const element of Object.values(row.columns).flat()) {
+      if (element.hoverEffects !== undefined) fail('header_mobile_hover_effect_forbidden');
       if (desktopKeys.has(element.key)) fail('header_element_key_collision');
       if (element.type === 'mainmenu' && !(element.params.style === 'icon' && element.params.full_screen === true || element.params.style === 'text' && element.params.full_screen === false)) fail('header_native_icon_menu_required');
     }

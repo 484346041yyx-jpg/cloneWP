@@ -17,7 +17,9 @@ $controls=$element->get_controls();$visibility=[];
 foreach(['hide_desktop','hide_tablet','hide_mobile'] as $key){$c=$controls[$key]??[];$visibility[$key]=['type'=>$c['type']??null,'return_value'=>$c['return_value']??null];}
 return ['ok'=>true,'mobile'=>$points['mobile']??null,'tablet'=>$points['tablet']??null,'woodmart'=>wp_get_theme(get_template())->get('Version'),'mobileOptimization'=>(bool)woodmart_get_opt('mobile_optimization',0),'visibility'=>$visibility];
 ` });
-  if (result?.ok !== true || result.mobile !== mobileMaxWidth || result.tablet !== 1024 || result.woodmart !== '8.3.4' || result.mobileOptimization !== false) fail('target_breakpoints_or_theme_unverified');
+  const version = typeof result?.woodmart === 'string' ? /^8\.(\d+)\.(\d+)$/.exec(result.woodmart) : null;
+  const supportedWoodmart = version && (Number(version[1]) > 3 || Number(version[1]) === 3 && Number(version[2]) >= 4);
+  if (result?.ok !== true || result.mobile !== mobileMaxWidth || result.tablet !== 1024 || !supportedWoodmart || result.mobileOptimization !== false) fail('target_breakpoints_or_theme_unverified');
   for (const name of ['desktop', 'tablet', 'mobile']) if (result.visibility?.['hide_' + name]?.type !== 'switcher' || result.visibility['hide_' + name].return_value !== 'hidden-' + name) fail('target_visibility_contract');
   return { visibility: result.visibility };
 }
