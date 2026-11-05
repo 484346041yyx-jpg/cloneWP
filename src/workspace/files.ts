@@ -28,9 +28,9 @@ export async function readLocal(root: string, relative: string, limit = 2 * 1024
   if (bytes.length > limit) fail('file_limit');
   return bytes;
 }
-export async function atomicJson(root: string, relative: string, value: unknown, exclusive = false): Promise<void> {
+export async function atomicJson(root: string, relative: string, value: unknown, exclusive = false, limit = 2 * 1024 * 1024): Promise<void> {
   const serialized = JSON.stringify(value, null, 2) + '\n';
-  if (Buffer.byteLength(serialized) > 2 * 1024 * 1024) fail('file_limit');
+  if (Buffer.byteLength(serialized) > limit) fail('file_limit');
   const file = await localPath(root, relative);
   await mkdir(path.dirname(file), { recursive: true }); await localPath(root, relative);
   const temporary = file + '.' + randomUUID() + '.tmp';

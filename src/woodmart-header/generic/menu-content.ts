@@ -68,7 +68,7 @@ async function readBound(ref: { path: string; sha256: string }): Promise<unknown
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) fail('path_escape');
   let current = base;
   for (const part of relative.split(path.sep)) { current = path.join(current, part); const info = await lstat(current); if (info.isSymbolicLink() || (await realpath(current)).toLowerCase() !== current.toLowerCase()) fail('reparse_path'); }
-  const info = await lstat(current); if (!info.isFile() || info.size > 32 * 1024 * 1024) fail('file_limit');
+  const info = await lstat(current); if (!info.isFile()) fail('file_limit');
   const bytes = await readFile(current); if (sha(bytes) !== ref.sha256) fail('reference_changed');
   return JSON.parse(bytes.toString('utf8'));
 }

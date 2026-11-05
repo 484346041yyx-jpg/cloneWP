@@ -20,7 +20,7 @@ export function componentPath(root: string, name: string): string {
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw Error(`component_path_escape: ${name}`);
   return resolved;
 }
-export async function readComponentBytes(root: string, name: string, limit = 32 * 1024 * 1024): Promise<Buffer> {
+export async function readComponentBytes(root: string, name: string, limit = Number.POSITIVE_INFINITY): Promise<Buffer> {
   const candidate = componentPath(root, name), [actualRoot, actual] = await Promise.all([realpath(root), realpath(candidate)]);
   componentPath(actualRoot, actual);
   const info = await stat(actual);

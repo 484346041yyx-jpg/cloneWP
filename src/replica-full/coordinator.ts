@@ -27,6 +27,7 @@ function validateHeader(value: FullReplicaHeaderCheckpoint, manifest: FullReplic
 }
 function validatePage(value: FullReplicaPageCheckpoint, manifest: FullReplicaManifest): void {
   if (!value || value.runId !== manifest.runId || value.status !== 'draft' || value.template !== 'elementor_header_footer' || value.headerId !== null) fail('page_checkpoint_invalid');
+  if (manifest.reservedDraft && value.pageId !== manifest.reservedDraft.pageId) fail('reserved_draft_checkpoint_identity');
   id(value.pageId); hash(value.bodyHash); url(value.editUrl, manifest); url(value.previewUrl, manifest);
 }
 function validateBody(value: FullReplicaBodyCheckpoint, page: FullReplicaPageCheckpoint, manifest: FullReplicaManifest): void {
@@ -48,6 +49,7 @@ function validatePublished(value: FullReplicaPublishedCheckpoint, bound: FullRep
 function validateResume(state: FullReplicaRunState, manifest: FullReplicaManifest): void {
   if (!state || state.version !== 1 || state.kind !== 'clonewp-full-replica-run' || state.taskId !== manifest.taskId || state.runId !== manifest.runId || state.manifestHash !== fullReplicaHash(manifest) || !Number.isSafeInteger(state.revision) || state.revision < 0) fail('resume_identity_conflict');
   const c = state.checkpoints;
+  if (manifest.deliveryPolicy === 'draft-for-user-review' && (c?.published || state.pending?.phase === 'publish')) fail('draft_publication_forbidden');
   if (!c || manifest.headerProvider === 'reused-woodmart-header' && c.header || c.header && !c.page || c.body && (!c.page || manifest.headerProvider !== 'reused-woodmart-header' && !c.header) || c.bound && !c.body || c.published && !c.bound) fail('resume_phase_conflict');
   if (c.header) validateHeader(c.header, manifest);
   if (c.page) validatePage(c.page, manifest);
@@ -61,6 +63,7 @@ function validateResume(state: FullReplicaRunState, manifest: FullReplicaManifes
 /** Local preparation is parallel; every remote phase is awaited and durably logged. */
 export async function runFullReplica(input: unknown, dependencies: FullReplicaDependencies, options: FullReplicaRunOptions = {}): Promise<FullReplicaRunResult> {
   const manifest = validateFullReplicaManifest(input);
+  if (options.publish && manifest.deliveryPolicy === 'draft-for-user-review') fail('draft_publication_forbidden');
   if (manifest.headerProvider === 'component') throw Error('replica_full_retired_entry');
   if (options.state) validateResume(options.state, manifest);
   if (options.state?.pending) fail('reconciliation_required');
@@ -115,7 +118,8 @@ export async function runFullReplica(input: unknown, dependencies: FullReplicaDe
     await persist(clearFailure({ ...state, review, status: review.decision === 'approved' ? 'reviewed' : 'review-changes-required' }));
   }
   if (review.decision !== 'approved') { if (state.status !== 'review-changes-required') await persist({ ...state, status: 'review-changes-required' }); return state; }
-  if (!options.publish) { if (state.status !== 'reviewed') await persist({ ...state, status: 'reviewed' }); return state; }
+  const autoPublish = manifest.workflowDefaults === 'section-roots-target-content-v1' && manifest.deliveryPolicy === 'publish-after-review';
+  if (!options.publish && !autoPublish) { if (state.status !== 'reviewed') await persist({ ...state, status: 'reviewed' }); return state; }
   validateFullReplicaReview(review, manifest, bound);
   try { if (!verifiedInThisCommand) await dependencies.verifyReview(review, bound); } // Never reuse a prior command's verification; mutation still requires server CAS.
   catch (error) { await persist({ ...state, lastError: { phase: 'review', code: safeFailure(error) } }); throw error; }

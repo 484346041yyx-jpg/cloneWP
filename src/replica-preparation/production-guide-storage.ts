@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { preparationJson } from './contract.js';
 
-export const PRODUCTION_GUIDE_STORAGE_BYTES = 32 * 1024 * 1024;
+// Compression is optional; this is a size preference, never an acceptance limit.
+export const PRODUCTION_GUIDE_COMPACTION_TARGET_BYTES = 2 ** 25;
 const STORAGE_KIND = 'clonewp-production-guide-native-settings-dictionary';
 const REFERENCE_KIND = 'clonewp-production-guide-owner-settings-reference';
 const MAX_VALUES = 2_000_000;
@@ -36,25 +37,24 @@ function owners(chunk: unknown): Array<Record<string, any>> {
   return out;
 }
 export function productionGuideChunkFitsStorage(input: unknown): boolean {
-  try { return Buffer.byteLength(preparationJson(input)) <= PRODUCTION_GUIDE_STORAGE_BYTES; }
+  try { preparationJson(input); return true; }
   catch (error) { if (error instanceof Error && error.message === 'replica_preparation_json_limit') return false; throw error; }
 }
-/** Old inline/chunk bytes stay unchanged. Only a chunk exceeding the existing byte budget is encoded. */
+/** Old inline/chunk bytes stay readable. Compact repeated settings when useful. */
 export function encodeProductionGuideChunk(input: unknown): unknown {
   const original = preparationJson(input); // Preserve the existing 2M-value/depth limits before encoding.
-  if (Buffer.byteLength(original) <= PRODUCTION_GUIDE_STORAGE_BYTES) return input;
+  if (Buffer.byteLength(original) <= PRODUCTION_GUIDE_COMPACTION_TARGET_BYTES) return input;
   const chunk = JSON.parse(original), dictionary = new Map<string, Record<string, unknown>>();
   for (const owner of owners(chunk)) {
     const canonical = preparationJson(owner.nativeSettings), settingsHash = sha(canonical);
     dictionary.set(settingsHash, owner.nativeSettings);
     owner.nativeSettings = { version: 1, kind: REFERENCE_KIND, componentKey: owner.componentKey, sha256: settingsHash };
   }
-  if (!dictionary.size) fail('chunk_limit');
+  if (!dictionary.size) return input;
   const encoded = { version: 1, kind: STORAGE_KIND, encoding: 'presentation-owner-native-settings-v1', originalSha256: sha(original), chunk, dictionary: [...dictionary].map(([sha256, nativeSettings]) => ({ sha256, nativeSettings })) };
-  if (!productionGuideChunkFitsStorage(encoded)) fail('chunk_limit');
-  return encoded;
+  return productionGuideChunkFitsStorage(encoded) && Buffer.byteLength(preparationJson(encoded)) < Buffer.byteLength(original) ? encoded : input;
 }
-/** Called only after the ordinary file-reference hash/32MiB guards. Restores the exact existing API value. */
+/** Called only after file-reference hash verification. Restores the exact existing API value. */
 export function decodeProductionGuideChunk(input: unknown): unknown {
   if (!record(input) || input.kind !== STORAGE_KIND) return input;
   if (!productionGuideChunkFitsStorage(input)) fail('chunk_limit');

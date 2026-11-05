@@ -352,19 +352,35 @@ async function collectSourceRenderEvidenceV2(options = {}) {
   if (!options.taskId || !options.snapshotId || !/^[a-f0-9]{64}$/.test(options.screenshotHash || '')) throw new Error('Source rendering requires task/snapshot and an actual screenshot hash');
   if (options.sourceUrl && options.sourceUrl !== location.href) throw new Error('Source rendering is outside the bound normal source page');
   const readonlyDOM = options.readonlyDOM === true;
-  if (document.fonts?.status !== 'loaded' && document.fonts?.ready) await document.fonts.ready;
+  // The native task scheduler is not replaced by Playwright's page clock.
+  // Keep the controller in the scheduled callback until the deadline fires.
+  const nativeTimeout = delay => {
+    if (!globalThis.scheduler?.postTask) return AbortSignal.timeout(delay);
+    const controller = new AbortController();
+    void scheduler.postTask(() => controller.abort(new Error('source rendering deadline')), { delay });
+    return controller.signal;
+  };
+  const renderDeadline = nativeTimeout(15000);
+  const bounded = (promise, signal = renderDeadline) => new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return; }
+    const abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+  const decodeDeadline = () => AbortSignal.any([renderDeadline, nativeTimeout(5000)]);
+  if (document.fonts?.status !== 'loaded' && document.fonts?.ready) await bounded(document.fonts.ready);
   const media = [], states = [], gaps = [], cache = new Map(), nodeSpecs = options.nodes || [], usageSpecs = options.usages || [], interactionSpecs = options.interactions || [];
   const nodeMap = new Map(nodeSpecs.map(node => [node.id || node.nodeId, node]));
   const nodes = new Map();
   for (const spec of nodeSpecs) { const id = spec.id || spec.nodeId, matches = document.querySelectorAll(spec.selector); if (matches.length !== 1) { gaps.push({ nodeId: id, code: 'source-render-selector-not-unique', count: matches.length }); continue; } nodes.set(id, matches[0]); }
   const paintable = element => { const box = element.getBoundingClientRect(); if (!(box.width > 0 && box.height > 0)) return false; let left = box.left, right = box.right, top = box.top, bottom = box.bottom; for (let owner = element; owner; owner = owner.parentElement) { const css = getComputedStyle(owner); if (css.display === 'none' || css.visibility === 'hidden' || css.visibility === 'collapse' || Number(css.opacity) === 0) return false; if (owner !== element) { const clip = owner.getBoundingClientRect(); if (/^(hidden|clip|auto|scroll)$/.test(css.overflowX)) { left = Math.max(left, clip.left); right = Math.min(right, clip.right); } if (/^(hidden|clip|auto|scroll)$/.test(css.overflowY)) { top = Math.max(top, clip.top); bottom = Math.min(bottom, clip.bottom); } } } return right - left > 0 && bottom - top > 0; };
-  const decode = async url => { if (!cache.has(url)) cache.set(url, (async () => { const image = new Image(); image.src = url; let timer; try { await Promise.race([image.decode(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('source image decode timeout')), 5000); })]); const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const context = canvas.getContext('2d'); if (!context) throw new Error('drawable canvas unavailable'); context.drawImage(image, 0, 0, 1, 1); return { decoded: image.naturalWidth > 0 && image.naturalHeight > 0, drawable: true, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight }; } catch { return { decoded: false, drawable: false, naturalWidth: image.naturalWidth || 0, naturalHeight: image.naturalHeight || 0 }; } finally { if (timer) clearTimeout(timer); } })()); return cache.get(url); };
+  const decode = async url => { if (!cache.has(url)) cache.set(url, (async () => { const image = new Image(); image.src = url; try { await bounded(image.decode(), decodeDeadline()); const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const context = canvas.getContext('2d'); if (!context) throw new Error('drawable canvas unavailable'); context.drawImage(image, 0, 0, 1, 1); return { decoded: image.naturalWidth > 0 && image.naturalHeight > 0, drawable: true, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight }; } catch { return { decoded: false, drawable: false, naturalWidth: image.naturalWidth || 0, naturalHeight: image.naturalHeight || 0 }; } })()); return cache.get(url); };
   for (const [nodeId, element] of nodes) {
     const usages = usageSpecs.filter(usage => usage.nodeId === nodeId);
     if (String(element.tagName).toLowerCase() === 'img') {
       const currentSrc = element.currentSrc || element.src;
-      let decoded = element.complete === true && element.naturalWidth > 0 && element.naturalHeight > 0, timer;
-      if (!readonlyDOM) try { await Promise.race([element.decode(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('actual source image decode timeout')), 5000); })]); decoded = element.naturalWidth > 0 && element.naturalHeight > 0; } catch { decoded = false; } finally { if (timer) clearTimeout(timer); }
+      let decoded = element.complete === true && element.naturalWidth > 0 && element.naturalHeight > 0;
+      if (!readonlyDOM && (decoded || element.loading !== 'lazy' || paintable(element))) try { await bounded(element.decode(), decodeDeadline()); decoded = element.naturalWidth > 0 && element.naturalHeight > 0; } catch { decoded = false; }
       let drawable = readonlyDOM ? decoded : false; if (!readonlyDOM && decoded) try { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const context = canvas.getContext('2d'); if (context) { context.drawImage(element, 0, 0, 1, 1); drawable = true; } } catch {}
       media.push({ nodeId, url: currentSrc, currentSrc, kind: 'image', decoded: decoded && currentSrc === (element.currentSrc || element.src), drawable, complete: element.complete === true, naturalWidth: element.naturalWidth, naturalHeight: element.naturalHeight, painted: paintable(element), proof: readonlyDOM ? 'browser-complete-currentSrc-natural-dimensions' : 'browser-decode-canvas' });
     }

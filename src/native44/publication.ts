@@ -108,7 +108,7 @@ async function immutable(filename: string, value: unknown): Promise<Native44Curr
   return { path: filename, sha256: hashV2(content) };
 }
 const operationPath = (runDir: string, operationId: string) => path.join(runDir, 'publications', identifier.parse(operationId));
-async function optional(filename: string) { try { const info = await stat(filename); if (!info.isFile() || info.size > 32 * 1024 * 1024 || await realpath(filename) !== filename) fail('artifact_invalid'); return await readFile(filename); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; } }
+async function optional(filename: string) { try { const info = await stat(filename); if (!info.isFile() || await realpath(filename) !== filename) fail('artifact_invalid'); return await readFile(filename); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; } }
 
 /** Validate a separate immutable publication chain, without rewriting a single
  * draft snapshot, frozen program, review hash or historical journal. */

@@ -36,7 +36,7 @@ async function checked(input: string, allowMissing = false): Promise<string> {
 async function bound(ref: FullReplicaFileRef, directory?: string): Promise<Buffer> {
   if (!ref || typeof ref.path !== 'string' || !/^[a-f0-9]{64}$/.test(ref.sha256)) fail('reference');
   const filename = await checked(ref.path); if (directory) { const relative = path.relative(directory, filename); if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) fail('proof_outside_run'); }
-  const info = await lstat(filename); if (!info.isFile() || info.size > 32 * 1024 * 1024) fail('file_limit'); const bytes = await readFile(filename); if (digest(bytes) !== ref.sha256) fail('proof_changed'); return bytes;
+  const info = await lstat(filename); if (!info.isFile()) fail('file_limit'); const bytes = await readFile(filename); if (digest(bytes) !== ref.sha256) fail('proof_changed'); return bytes;
 }
 async function json<T>(ref: FullReplicaFileRef, directory?: string): Promise<T> { return JSON.parse((await bound(ref, directory)).toString('utf8')) as T; }
 async function writeOnce(filename: string, bytes: string): Promise<FullReplicaFileRef> {

@@ -15,7 +15,7 @@ import { advanceEditorRecovery } from './recovery-store.js';
 import { resolveEditorTask } from './task.js';
 export { resolveEditorTask } from './task.js';
 
-const read = async (p: string) => { if ((await stat(p)).size > 32 * 1024 * 1024) throw Error('editor_completion_file_size'); return JSON.parse(await readFile(p, 'utf8')); };
+const read = async (p: string) => { if (!(await stat(p)).isFile()) throw Error('editor_completion_file_size'); return JSON.parse(await readFile(p, 'utf8')); };
 export async function runEditorCompletionCLI(args: string[], rootInput = 'D:/cloneWP', injected?: EditorDriver, recoveryInput?: unknown) {
   if (args[0] === 'recover') {
     if (args.length !== 4 || args[1] !== '--run-dir' || args[3] !== '--stdin') throw Error('editor_completion_arguments');
@@ -54,7 +54,7 @@ export async function runEditorCompletionCLI(args: string[], rootInput = 'D:/clo
       if (!Array.isArray(refs) || refs.length > 20) throw Error('editor_completion_previous_limit');
       for (const ref of refs) {
         if (!ref || Object.keys(ref).sort().join(',') !== 'path,sha256' || !/^[a-f0-9]{64}$/.test(ref.sha256)) throw Error('editor_completion_previous_reference');
-        const file = await editorPath(dir, ref.path); if ((await stat(file)).size > 32 * 1024 * 1024) throw Error('editor_completion_file_size'); const b = await readFile(file);
+        const file = await editorPath(dir, ref.path); if (!(await stat(file)).isFile()) throw Error('editor_completion_file_size'); const b = await readFile(file);
         if (createHash('sha256').update(b).digest('hex') !== ref.sha256) throw Error('editor_completion_previous_changed');
         const old = extract(JSON.parse(b.toString('utf8')));
         if (old.pageId !== scope.pageId || old.runId !== scope.runId) throw Error('editor_completion_previous_owner');

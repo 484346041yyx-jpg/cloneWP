@@ -6,6 +6,9 @@ import { atomicJson, captureWorkspace, changedFiles, fail, hash, readLocal, tran
 
 // Separate storage deliberately preserves v1 state and tokens in already-running clients.
 const FILE = 'data/workspace/resources.json';
+// Active owners each carry a workspace snapshot; keep a separate bounded budget
+// for the aggregate without increasing limits on individual handoffs or inputs.
+const RESOURCE_STORE_LIMIT = 16 * 1024 * 1024;
 export const resourceKey = z.string().min(1).max(500).regex(/^(?:local|remote|task):[a-z0-9][a-z0-9._:/-]*$/)
   .refine(s => !s.includes('..') && !s.includes('//') && !s.endsWith('/') && !s.includes('/./'));
 export function resourceKeys(input: string[]): string[] {
@@ -22,14 +25,14 @@ const storeSchema = z.object({ version: z.literal(1), kind: z.literal('clonewp-r
 type Store = z.infer<typeof storeSchema>;
 export type ResourceOwner = z.infer<typeof ownerSchema>;
 async function read(root: string): Promise<Store> {
-  try { const store = storeSchema.parse(JSON.parse((await readLocal(root, FILE)).toString())); for (const owner of store.owners) verifySnapshot(owner.baseline); return store; }
+  try { const store = storeSchema.parse(JSON.parse((await readLocal(root, FILE, RESOURCE_STORE_LIMIT)).toString())); for (const owner of store.owners) verifySnapshot(owner.baseline); return store; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, kind: 'clonewp-resource-workspace', fence: 0, owners: [], tickets: [], handoffs: [] }; throw error; }
 }
 // Only the tiny metadata transaction retries. A remote operation is never retried here.
 async function update<T>(root: string, fn: (store: Store) => Promise<T>): Promise<T> {
   const deadline = Date.now() + 15000;
   for (;;) {
-    try { return await transaction(root, async () => { const store = await read(root); const result = await fn(store); await atomicJson(root, FILE, store); return result; }); }
+    try { return await transaction(root, async () => { const store = await read(root); const result = await fn(store); await atomicJson(root, FILE, store, false, RESOURCE_STORE_LIMIT); return result; }); }
     catch (error) { if (!(error instanceof Error) || error.message !== 'workspace_transaction_busy_inspect_before_repair' || Date.now() >= deadline) throw error; await delay(40); }
   }
 }

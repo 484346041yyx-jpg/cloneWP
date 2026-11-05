@@ -14,7 +14,7 @@ export async function editorPath(base: string, input: string, missing = false): 
   for (let i = 0; i < parts.length; i++) { cursor = path.join(cursor, parts[i]); try { const s = await lstat(cursor); if (s.isSymbolicLink() || path.resolve(await realpath(cursor)).toLowerCase() !== cursor.toLowerCase()) throw Error('editor_completion_path_alias'); } catch (e) { if (missing && i === parts.length - 1 && (e as NodeJS.ErrnoException).code === 'ENOENT') return p; throw e; } }
   return p;
 }
-async function readJson(file: string) { const s = await lstat(file); if (!s.isFile() || s.size > 32 * 1024 * 1024) throw Error('editor_completion_file_size'); return JSON.parse(await readFile(file, 'utf8')); }
+async function readJson(file: string) { const s = await lstat(file); if (!s.isFile()) throw Error('editor_completion_file_size'); return JSON.parse(await readFile(file, 'utf8')); }
 async function save(dir: string, name: string, value: unknown, immutable = false) {
   const p = await editorPath(dir, name, true), free = await statfs(dir); if (free.bavail * free.bsize < 512 * 1024 * 1024) throw Error('editor_completion_evidence_space');
   const bytes = JSON.stringify(value, null, 2) + '\n';

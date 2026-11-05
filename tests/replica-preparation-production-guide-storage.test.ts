@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {readFile,writeFile} from 'node:fs/promises';
-import {encodeProductionGuideChunk,decodeProductionGuideChunk,productionGuideChunkFitsStorage,PRODUCTION_GUIDE_STORAGE_BYTES} from '../src/replica-preparation/production-guide-storage.js';
+import {encodeProductionGuideChunk,decodeProductionGuideChunk,productionGuideChunkFitsStorage,PRODUCTION_GUIDE_COMPACTION_TARGET_BYTES} from '../src/replica-preparation/production-guide-storage.js';
 import {preparationJson} from '../src/replica-preparation/contract.js';
 import {initializePreparation,readPreparationProductionGuide} from '../src/replica-preparation/io.js';
 import {preparationIOFixture} from './helpers/preparation-io-fixture.js';
@@ -18,7 +18,7 @@ test('small historical chunks stay inline and owner-looking source data never co
  assert.equal(encodeProductionGuideChunk(old),old);assert.equal(decodeProductionGuideChunk(old),old);
 });
 test('oversize source-presentation settings encode losslessly without upgrading any evidence status',()=>{
- const source=original(),canonical=preparationJson(source);assert.ok(Buffer.byteLength(canonical)>PRODUCTION_GUIDE_STORAGE_BYTES);
+ const source=original(),canonical=preparationJson(source);assert.ok(Buffer.byteLength(canonical)>PRODUCTION_GUIDE_COMPACTION_TARGET_BYTES);
  const encoded:any=encodeProductionGuideChunk(source);assert.equal(encoded.kind,'clonewp-production-guide-native-settings-dictionary');assert.equal(encoded.dictionary.length,1);assert.ok(productionGuideChunkFitsStorage(encoded));
  assert.equal(preparationJson(decodeProductionGuideChunk(encoded)),canonical);assert.equal(source.guide.viewports[0].requirements.length,700);assert.equal(source.guide.rendered,'not-verified');assert.equal(getOwners(encoded)[0].responsibility,'assigned-not-render-verified');
 });
@@ -36,8 +36,9 @@ test('dictionary refs, hashes, component ownership, version and unchanged-source
   assert.throws(()=>decodeProductionGuideChunk(value),/production_guide_storage_/,scenario);
  }
 });
-test('storage never raises byte or JSON value budgets and rejects decompression expansion before allocation',()=>{
- assert.throws(()=>encodeProductionGuideChunk({guide:{sourceText:'x'.repeat(PRODUCTION_GUIDE_STORAGE_BYTES+1)}}),/chunk_limit/);
+test('storage accepts uncompressible large guides and rejects excessive JSON expansion before allocation',()=>{
+ const large={guide:{sourceText:'x'.repeat(PRODUCTION_GUIDE_COMPACTION_TARGET_BYTES+1)}};
+ assert.equal(encodeProductionGuideChunk(large),large);
  assert.throws(()=>encodeProductionGuideChunk({guide:{values:Array(2_000_000).fill(null)}}),/json_limit/);
  const encoded:any=encodeProductionGuideChunk(original()),expanded={values:Array(100_000).fill(0)},hash=digest(expanded);encoded.dictionary=[{sha256:hash,nativeSettings:expanded}];for(const owner of getOwners(encoded))owner.nativeSettings.sha256=hash;
  assert.throws(()=>decodeProductionGuideChunk(encoded),/json_limit/);

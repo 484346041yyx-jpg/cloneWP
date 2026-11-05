@@ -25,13 +25,17 @@ export interface FullReplicaManifest {
   reusedHeader?: FullReplicaReusedHeader;
   /** New body tasks inherit the site footer; historical tasks omit this. */
   pageScope?: 'body-only';
-  deliveryPolicy: 'publish-after-review';
+  deliveryPolicy: 'publish-after-review' | 'draft-for-user-review';
+  /** New preparation defaults. Omitted historical contracts retain explicit publication. */
+  workflowDefaults?: 'section-roots-target-content-v1';
+  reservedDraft?: import('./page-scope.js').ReservedReplicaDraft;
   reviewSkipPolicy?: TaskReviewSkipPolicy;
   /** Frozen only for new creation; absent historical tasks retain their contract. */
   nativeImagePolicy?: NativeImagePolicy;
   editorCompletionPolicy?: { version: 1; mode: 'align-and-reopen'; runtime?: 'shared-owned-editor-v1' };
   responsive?: ResponsivePlan;
   sourceEvidence: FullReplicaFileRef;
+  effectTrace?: FullReplicaFileRef;
   sourcePartition: FullReplicaSourcePartition;
   header?: { plan: HeaderModulePlan; bundleDirectory: string; assets: FullReplicaFileRef };
   body: { program: FullReplicaFileRef; css: FullReplicaFileRef; sourceUnits: FullReplicaFileRef; navigationForms?: NavigationFormSpec[]; configurator?: FullReplicaConfiguratorSpec };

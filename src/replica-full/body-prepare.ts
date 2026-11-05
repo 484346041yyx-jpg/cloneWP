@@ -1,4 +1,4 @@
-import { sourceFooterNodes, assertBodySelectionRequest, assertBodySelectionUnits } from './page-scope.js';
+import { sourceFooterNodes, assertBodySelectionRequest, assertBodySelectionUnits, assertReservedDraftEvidence } from './page-scope.js';
 import path from 'node:path';
 import {assertBodyStyleAmendment,type BodyStyleAmendment} from './unwritten-body-style-amendment.js';
 import { createHash } from 'node:crypto';
@@ -103,7 +103,7 @@ async function checkedFile(filename: string): Promise<string> {
   if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) fail('path_escape');
   let current = root;
   for (const segment of relative.split(path.sep)) { current = path.join(current, segment); const info = await lstat(current); if (info.isSymbolicLink() || (await realpath(current)).toLowerCase() !== current.toLowerCase()) fail('reparse_path'); }
-  const info = await lstat(current); if (!info.isFile() || info.size > 32 * 1024 * 1024) fail('input_size'); return absolute;
+  const info = await lstat(current); if (!info.isFile()) fail('input_size'); return absolute;
 }
 async function bytesAt(ref: FullReplicaFileRef, base = ROOT): Promise<{ filename: string; bytes: Buffer }> {
   refSchema.parse({ path: ref.path, sha256: ref.sha256 }); const filename = await checkedFile(path.resolve(base, ref.path)), bytes = await readFile(filename);
@@ -112,9 +112,35 @@ async function bytesAt(ref: FullReplicaFileRef, base = ROOT): Promise<{ filename
 async function jsonAt(ref: FullReplicaFileRef, base = ROOT): Promise<{ filename: string; value: unknown }> {
   const { filename, bytes } = await bytesAt(ref, base); const value: unknown = JSON.parse(bytes.toString('utf8')); bodyJson(value); return { filename, value };
 }
-function under(nodes: ObservationPacketV2['nodes'], child: string, owner: string): boolean {
+function under(nodes: Record<string, { parentId: string | null }>, child: string, owner: string): boolean {
   const seen = new Set<string>(); let cursor: string | null = child;
   while (cursor && !seen.has(cursor)) { if (cursor === owner) return true; seen.add(cursor); cursor = nodes[cursor]?.parentId ?? null; } return false;
+}
+/** Style planning needs only task-owned facts; the complete source stays in
+ * sourceFacts for identity, coverage, and readback. Do not duplicate shared
+ * chrome or unselected regions in the second desktop/phone projection. */
+export function projectOwnedBodyPresentationFacts(
+  desktop: SourceFactsV2,
+  desktopPackets: Parameters<typeof projectPhoneProductionFacts>[1],
+  desktopRefs: Parameters<typeof projectPhoneProductionFacts>[2],
+  phones: Parameters<typeof projectPhoneProductionFacts>[3],
+  units: BodySourceUnits['units'],
+  phoneOwners: Array<{ snapshotId: string; nodeId: string }>,
+): SourceFactsV2 {
+  const desktopIds = new Set(units.flatMap(unit => unit.sourceFactIds));
+  const desktopOwners = units.map(unit => ({ snapshotId: unit.snapshotId, nodeId: unit.ownerNodeId }));
+  const keep = (packet: ObservationPacketV2, owners: typeof phoneOwners) => owners.some(owner => owner.snapshotId === packet.snapshot.id && Object.hasOwn(packet.nodes, owner.nodeId));
+  const desktopIndices = desktopPackets.map((_, index) => index).filter(index => keep(desktopPackets[index], desktopOwners));
+  const phoneIndices = phones.packets.map((_, index) => index).filter(index => keep(phones.packets[index], phoneOwners));
+  const scoped = projectPhoneProductionFacts(desktop, desktopIndices.map(index => desktopPackets[index]), desktopIndices.map(index => desktopRefs[index]), {
+    packets: phoneIndices.map(index => phones.packets[index]), packetFiles: phoneIndices.map(index => phones.packetFiles[index]),
+  });
+  const phoneBySnapshot = new Map(scoped.snapshots.map(snapshot => [snapshot.id, snapshot.nodes]));
+  const phoneOwned = (snapshotId: string, nodeId: string) => {
+    const nodes = phoneBySnapshot.get(snapshotId);
+    return !!nodes && phoneOwners.some(owner => owner.snapshotId === snapshotId && under(nodes, nodeId, owner.nodeId));
+  };
+  return { ...scoped, facts: Object.fromEntries(Object.entries(scoped.facts).filter(([id, fact]) => desktopIds.has(id) || phoneOwned(fact.snapshotId, fact.nodeId))) };
 }
 function headerNodes(packet: ObservationPacketV2): Set<string> {
   const roots = new Set(packet.regions.filter(region => {
@@ -184,8 +210,16 @@ export async function prepareActualBody(input: FullReplicaManifest, amendment?: 
   if (!sameSet(sourceUnits.units.map(row => row.id), manifest.sourcePartition.allUnits)) fail('unit_partition');
   assertBodySelectionUnits(manifest.sourcePartition, sourceUnits.units);
   if (manifest.sourcePartition.selection) assertBodySelectionRequest(manifest.sourcePartition, (await jsonAt(manifest.sourcePartition.selection.evidence, programBase)).value, manifest);
+  if (manifest.reservedDraft) assertReservedDraftEvidence(manifest.reservedDraft, (await jsonAt(manifest.reservedDraft.evidence, programBase)).value, manifest);
   const [factsFile, planFile, assetsFile, identity] = await Promise.all([jsonAt(program.sourceFacts, programBase), jsonAt(program.componentPlan, programBase), jsonAt(program.assetsManifest, programBase), native44KnowledgeIdentity(ROOT)]);
-  void planFile; // Its exact local identity is retained; actual unit mapping below derives from the program tree.
+  if (manifest.workflowDefaults) {
+    // The merge records each independent section in source order, with its root first.
+    // Verify that the saved program did not wrap, reorder or combine those roots.
+    const modules = (planFile.value as { modules?: Array<{ key?: string }> } | null)?.modules;
+    if (!Array.isArray(modules) || modules.length !== program.blocks.length ||
+      modules.some((module, index) => !module || program.blocks[index].kind !== 'composite' || program.blocks[index].key !== module.key) ||
+      manifest.responsive?.sections.some(section => section.mode === 'duplicate')) fail('independent_section_roots_required');
+  }
   const sourceFacts = validateSourceFactsV2(factsFile.value);
   if(!equal(program.currentRecord??null,manifest.currentRecord??null)||!equal(program.componentExtension??null,manifest.componentExtension??null))fail('current_record_contract_mismatch');
   assertComponentModelSource(program, sourceFacts);
@@ -270,7 +304,12 @@ export async function prepareActualBody(input: FullReplicaManifest, amendment?: 
   if (manifest.version >= 3) assertCarouselNavigationMapped({ program, sourceUnits, snapshots, css: effectiveCSS,
     ...(phonePackets && manifest.responsive ? { phone: { packets: phonePackets, sections: manifest.responsive.sections } } : {}) });
   const knowledge = await loadNative44Knowledge(usedNative44WidgetTypes(program), undefined, program.componentExtension);
-  const presentationSource = program.styleResolutionVersion && phoneObservation ? projectPhoneProductionFacts(sourceFacts, packetRows.map(row => row.packet), packetRows.map(row => ({ ...row.ref, path: row.filename, snapshotId: row.packet.snapshot.id })), phoneObservation) : sourceFacts;
+  const bodyOnlyProjection = manifest.pageScope === 'body-only' && !!program.styleResolutionVersion && !!phoneObservation;
+  const desktopPackets = packetRows.map(row => row.packet), desktopRefs = packetRows.map(row => ({ ...row.ref, path: row.filename, snapshotId: row.packet.snapshot.id }));
+  const presentationSource = program.styleResolutionVersion && phoneObservation ? bodyOnlyProjection
+    ? projectOwnedBodyPresentationFacts(sourceFacts, desktopPackets, desktopRefs, phoneObservation, sourceUnits.units.filter(unit => bodyIds.includes(unit.id)), manifest.responsive!.sections.flatMap(section => section.evidence))
+    : projectPhoneProductionFacts(sourceFacts, desktopPackets, desktopRefs, phoneObservation)
+    : sourceFacts;
   if (program.styleResolutionVersion && manifest.responsive) for (const section of manifest.responsive.sections) for (const item of section.styleBindings ?? []) {
     const target = walkNative44(program.blocks).find(node => node.key === (section.mode === 'duplicate' ? mobileComponentKey(item.componentKey) : item.componentKey));
     const fact = presentationSource.facts[item.binding.sourceFactId];
@@ -291,7 +330,7 @@ export async function prepareActualBody(input: FullReplicaManifest, amendment?: 
     styleCapabilities = (await jsonAt(program.styleCapabilities, programBase)).value as Native44StyleCapabilities;
     if (styleCapabilities.version !== 1 || styleCapabilities.kind !== 'native44-style-capabilities' || styleCapabilities.knowledgeFingerprint !== knowledge.index.fingerprint || !Array.isArray(styleCapabilities.variableConsumers) || !styleCapabilities.wrapperClassesByType || !equal(styleCapabilities.packageHashes, knowledge.index.source.packageHashes)) fail('style_capabilities_identity');
   }
-  const payload: ActualBodyPayload = { ...(amendment ? { authoringAmendment: { originalManifestHash: fullReplicaHash(frozenManifest), effectiveProgramHash: amendment.effectiveProgramHash, effectiveResponsiveHash: amendment.effectiveResponsiveHash, ...(amendment.reference ? { bundle: amendment.reference } : {}) } } : {}), ...(manifest.responsive ? { baseProgram } : {}), ...(styleCapabilities ? { styleCapabilities } : {}), ...(program.styleResolutionVersion ? { presentationSource: { ...presentationSource, facts: { ...sourceFacts.facts, ...presentationSource.facts } } } : {}), program, css: effectiveCSS, sourceUnits, sourceEvidence, sourceFacts, knowledge, manifest, programPath: programFile.filename, sourceFactsPath: factsFile.filename, assetsManifestPath: assetsFile.filename, assetsManifest: assetsFile.value };
+  const payload: ActualBodyPayload = { ...(amendment ? { authoringAmendment: { originalManifestHash: fullReplicaHash(frozenManifest), effectiveProgramHash: amendment.effectiveProgramHash, effectiveResponsiveHash: amendment.effectiveResponsiveHash, ...(amendment.reference ? { bundle: amendment.reference } : {}) } } : {}), ...(manifest.responsive ? { baseProgram } : {}), ...(styleCapabilities ? { styleCapabilities } : {}), ...(program.styleResolutionVersion ? { presentationSource: bodyOnlyProjection ? presentationSource : { ...presentationSource, facts: { ...sourceFacts.facts, ...presentationSource.facts } } } : {}), program, css: effectiveCSS, sourceUnits, sourceEvidence, sourceFacts, knowledge, manifest, programPath: programFile.filename, sourceFactsPath: factsFile.filename, assetsManifestPath: assetsFile.filename, assetsManifest: assetsFile.value };
   const prepared: FullReplicaPreparedBody = freeze({ programHash: manifest.body.program.sha256, cssInputHash: manifest.body.css.sha256, sourceUnitsHash: manifest.body.sourceUnits.sha256, sourceEvidenceHash: manifest.sourceEvidence.sha256, sourceUnitIds: bodyIds, componentSourceUnitIds: componentIds, embeddedHeaderCount: 0, payload });
   assertFullReplicaBodyScope(prepared, frozenManifest); proofs.set(prepared, { digest: preparedBodyAttestationDigest(prepared), manifestHash: fullReplicaHash(frozenManifest) }); return prepared;
 }

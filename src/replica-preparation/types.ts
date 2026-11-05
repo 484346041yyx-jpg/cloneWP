@@ -1,3 +1,5 @@
+import type { z } from 'zod';
+import type { EffectProbe, effectImplementationSchema } from './effect-trace.js';
 import type { Native44Component, Native44Program } from '../native44/types.js';
 import type { SourceFactsV2 } from '../replica-v2/source.js';
 import type { BodySourceUnits } from '../replica-full/body-prepare.js';
@@ -41,6 +43,10 @@ export interface PreparationPlan {
   bodyBase: Omit<Native44Program, 'blocks'>; headerBase?: HeaderModulePlan;
   reusedHeader?: FullReplicaReusedHeader;
   pageScope?: 'body-only';
+  deliveryPolicy?: 'draft-for-user-review';
+  /** Frozen by initialization; absent on historical preparation contracts. */
+  workflowDefaults?: 'section-roots-target-content-v1';
+  reservedDraft?: import('../replica-full/page-scope.js').ReservedReplicaDraft;
   sourcePartition: FullReplicaSourcePartition;
   navigationForms?: NavigationFormSpec[];
   configurator?: FullReplicaConfiguratorSpec;
@@ -49,6 +55,9 @@ export interface PreparationPlan {
   responsive?: ResponsiveSource;
   boundaryTable?: import('./boundaries.js').BoundaryTable;
   executionPolicy?: PreparationExecutionPolicy;
+  effectTracePolicy?: 'source-effect-trace-v1';
+  effectProbes?: EffectProbe[];
+  effectObservations?: PreparationFileRef[];
   shared: {
     decisions: Array<{ key: string; value: unknown; evidence: PreparationFileRef[] }>;
     compatibility: Array<{ key: typeof PREPARATION_COMPATIBILITY_KEYS[number]; status: 'verified' | 'not-applicable' | 'unresolved'; reason: string; evidence: PreparationFileRef[] }>;
@@ -64,6 +73,7 @@ export interface PreparationJob {
 }
 export interface PreparationSectionResult {
   key: string; blocks: Native44Component[]; css: string; responsive?: ResponsiveSection;
+  effectImplementations?: Array<z.infer<typeof effectImplementationSchema>>;
   fidelity?: Array<{ kind: BodyFidelityKind; componentKeys: string[]; mechanism: 'native' | 'scoped-css' | 'task-local-html'; implementation: string }>;
 }
 export interface PreparationJobResult {

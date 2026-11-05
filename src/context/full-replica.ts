@@ -16,7 +16,7 @@ export async function fullReplicaContext(root: string, options: ContextLoadOptio
     const resolved = path.resolve(root, filename); contextContained(root, resolved);
     let current = root; for (const segment of path.relative(root, resolved).split(path.sep)) { current = path.join(current, segment); if ((await lstat(current)).isSymbolicLink()) throw Error('context_full_reparse_path'); }
     const actual = await realpath(resolved); contextContained(root, actual);
-    const info = await lstat(actual); if (!info.isFile() || info.size > 32 * 1024 * 1024) throw Error('context_file_too_large');
+    const info = await lstat(actual); if (!info.isFile()) throw Error('context_file_too_large');
     const bytes = await readFile(actual); onRead?.(bytes.length);
     const item = { path: actual, sha256: contextHash(bytes), bytes: bytes.length, reason };
     if (record) records.push(item); return { ...item, data: json ? JSON.parse(bytes.toString('utf8')) : undefined };

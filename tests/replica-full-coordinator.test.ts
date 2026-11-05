@@ -95,6 +95,33 @@ test('new policy keeps published delivery pending until editor alignment and nor
   assert.equal(fullReplicaDelivery(result, f.manifest, { required: true, complete: true, status: 'complete' }).complete, true);
 });
 
+test('new workflow publishes on approval without a second command and leaves rejected reviews unpublished', async () => {
+  const f = fixture(), manifest = { ...f.manifest, workflowDefaults: 'section-roots-target-content-v1' as const };
+  const built = await runFullReplica(manifest, f.dependencies);
+  assert.ok('kind' in built);
+  assert.equal(built.status, 'awaiting-review');
+  assert.ok(!f.calls.includes('publish'));
+  const published = await runFullReplica(manifest, f.dependencies, { state: built, reviewInput: {} });
+  assert.ok('kind' in published);
+  assert.equal(published.status, 'published');
+  assert.deepEqual(f.calls.slice(-3), ['review', 'verify-current-review', 'publish']);
+  const reopened = await runFullReplica(manifest, f.dependencies, { state: published });
+  assert.deepEqual(reopened, published);
+  assert.equal(f.calls.filter(call => call === 'publish').length, 1);
+
+  const rejected = fixture();
+  rejected.dependencies.reviewWholePage = async () => ({ ...rejected.review, decision: 'changes-required' });
+  const reviewed = await runFullReplica(manifest, rejected.dependencies, { reviewInput: {} });
+  assert.ok('kind' in reviewed);
+  assert.equal(reviewed.status, 'review-changes-required');
+  assert.ok(!rejected.calls.includes('publish'));
+
+  const stale = fixture();
+  stale.dependencies.verifyReview = async () => { throw Error('Current review mismatch'); };
+  await assert.rejects(runFullReplica(manifest, stale.dependencies, { reviewInput: {} }), /Current review mismatch/);
+  assert.ok(!stale.calls.includes('publish'));
+});
+
 test('review and publish in one command verify once; a new publish command still verifies again', async () => {
   const combined = fixture();
   const result = await runFullReplica(combined.manifest, combined.dependencies, { reviewInput: {}, publish: true });

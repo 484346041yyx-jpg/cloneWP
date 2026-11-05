@@ -304,7 +304,7 @@ export async function createReusedBodyDependencies(input: Helpers): Promise<Omit
     },
     async createPage(prepared, operation) {
       assertActualPreparedBody(prepared.body, manifest); const services = await remote(), before = await services.reused.inspect();
-      if (before.page) fail('page_exists_reconcile');
+      if (manifest.reservedDraft ? before.page?.pageId !== manifest.reservedDraft.pageId : before.page !== null) fail('page_exists_reconcile');
       const result = await mutate('create-page', before, operation, { title: manifest.title, slug: manifest.slug }), checkpoint = pageCheckpoint(result.snapshot);
       if (page(result.snapshot).elements.length || page(result.snapshot).title !== manifest.title || !isNativeReplicaSlug(manifest.slug, page(result.snapshot).slug)) fail('created_page_changed');
       await claim(prepared.body, checkpoint.pageId);
@@ -610,6 +610,19 @@ export async function createReusedBodyDependencies(input: Helpers): Promise<Omit
             }
           }
         }
+      }
+      if (operation.phase === 'page' && manifest.reservedDraft) {
+        const intents = (await readdir(directory)).filter(name => name.startsWith(`${operation.operationId}-reuse-create-page-intent-`) && name.endsWith('.json'));
+        if (intents.length !== 1 || current.page?.pageId !== manifest.reservedDraft.pageId || current.page.headerId !== null || current.page.elements.length !== 0 || current.page.settings.custom_css) return { status: 'conflict' };
+        const proof = JSON.parse(await readFile(path.join(directory, intents[0]), 'utf8')), intent = proof.value;
+        const expectedPayload = { title: manifest.title, slug: manifest.slug };
+        if (fullReplicaHash(proof.operation) !== fullReplicaHash(operation) || intent?.action !== 'create-page' || typeof intent.operationId !== 'string' || intent.protectedHash !== resources.sharedHash || intent.payloadHash !== fullReplicaHash(expectedPayload) || fullReplicaHash(intent.payload) !== fullReplicaHash(expectedPayload)) return { status: 'conflict' };
+        const receipt = current.receipts[intent.operationId];
+        if (!receipt && current.hash === intent.beforeHash) return { status: 'before' };
+        if (receipt?.state !== 'complete' || receipt.action !== 'create-page' || receipt.payloadHash !== intent.payloadHash || fullReplicaHash(receipt.result ?? null) !== fullReplicaHash({ pageId: manifest.reservedDraft.pageId })) return { status: 'conflict' };
+        const checkpoint = pageCheckpoint(current);
+        await operationFile(operation, 'reuse-page-confirmed', { snapshot: current, checkpoint, reconciled: true });
+        return { status: 'after', checkpoint };
       }
       if (operation.phase === 'page' && !current.page && !Object.values(current.receipts).some(row => row.state === 'started')) return { status: 'before' };
       if (operation.phase === 'body' && checkpoints.page && current.page?.bodyHash === checkpoints.page.bodyHash && current.page.headerId === null) return { status: 'before' };

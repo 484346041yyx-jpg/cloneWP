@@ -156,6 +156,7 @@ export function mergePreparationResults(planInput: PreparationPlan, jobInputs: P
       assertPreparationSectionCSS(fragment.css, section.key);
       if (plan.boundaryTable) assertBoundaryFragment(fragment);
       if (plan.responsive ? fragment.responsive?.key !== section.key : fragment.responsive !== undefined) fail('responsive_section_required');
+      if (plan.workflowDefaults && fragment.responsive?.mode === 'duplicate') fail('responsive_section_root_duplicated');
       const nodes = walkNative44(fragment.blocks), seenFacts = new Set<string>();
       for (const node of nodes) {
         if (node.key !== section.key && !node.key.startsWith(section.key + '_') || keys.has(node.key)) fail('component_key_scope'); keys.add(node.key);

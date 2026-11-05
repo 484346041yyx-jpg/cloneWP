@@ -12,6 +12,8 @@
 
 ## 目录与启用范围
 
+默认控件先复用现有组件档案；按组件 key 查[已启用原生组件绘制索引](docs/knowledge/native-paint-component-index.md)，共享细节见[原生组件绘制基线](docs/knowledge/native-paint-baselines.md)。同提供方版本、同渲染模式复用源码基线；目标站的绘制条件不变时也复用已验证的实测基线。只有未覆盖的模式、影响绘制的配置变化或实际差异才补查，最终仍验收当前页面。补充知识不修改 native44 的冻结索引或执行资格。
+
 当前执行集合为原 43 Widget 加 1 Container，身份和哈希由冻结目录/代码保护。规范化知识位于 D:/cloneWP/data/native44；日常只读 index、共享高级合同和本次档案，不反复解析大手册或调用 Cloneweb 流水线。
 
 通用注册目录区分已研究知识、启用集合、执行适配。新组件可入学习目录，默认 reference-only/adapter-pending，不因此进入44 writer；注册元数据、自填适配器名或旧站 ID 不授予权限。

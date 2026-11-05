@@ -15,7 +15,7 @@ export async function readNativeContentRef(ref: {path:string;sha256:string}, bas
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw Error('replica_full_public_path');
   let cursor = actualRoot;
   for (const part of relative.split(path.sep)) { cursor = path.join(cursor, part); const info = await lstat(cursor); if (info.isSymbolicLink() || (await realpath(cursor)).toLowerCase() !== cursor.toLowerCase()) throw Error('replica_full_public_reparse'); }
-  const info = await lstat(filename); if (!info.isFile() || info.size > 32*1024*1024) throw Error('replica_full_public_file_size');
+  const info = await lstat(filename); if (!info.isFile()) throw Error('replica_full_public_file_size');
   const bytes = await readFile(filename); if (createHash('sha256').update(bytes).digest('hex') !== ref.sha256) throw Error('replica_full_public_reference_changed'); return bytes;
 }
 /** Same native44 evidence and knowledge, with the selected public region as owner. */

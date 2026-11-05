@@ -231,7 +231,7 @@ export async function loadNative44RevisionRepresentationTemplates(rootInput: str
   if (await realpath(folder) !== folder) fail('operation_template_alias');
   const read = async (reference: { path: string; sha256: string }, name: string) => {
     if (!reference || !isHashV2(reference.sha256) || path.resolve(root, reference.path) !== path.join(folder, name) || await realpath(reference.path) !== path.join(folder, name)) fail('operation_template_reference');
-    const info = await stat(reference.path); if (!info.isFile() || info.size > 32 * 1024 * 1024) fail('operation_template_size');
+    const info = await stat(reference.path); if (!info.isFile()) fail('operation_template_size');
     const data = await readFile(reference.path); if (hashV2(data) !== reference.sha256) fail('operation_template_hash');
     return JSON.parse(data.toString('utf8'));
   };

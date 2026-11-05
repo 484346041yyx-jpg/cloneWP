@@ -40,7 +40,8 @@ test('full domain remains bounded independently while the header limits stay unc
   assert.throws(() => canonicalHeaderJson(body), /woodmart_header_json_limit_exceeded/);
   assert.doesNotThrow(() => canonicalFullReplicaJson(body));
   assert.throws(() => canonicalFullReplicaJson(Array(FULL_REPLICA_JSON_LIMITS.values).fill(null)), /replica_full_json_limit/);
-  assert.throws(() => canonicalFullReplicaJson('x'.repeat(FULL_REPLICA_JSON_LIMITS.bytes)), /replica_full_json_limit/);
+  const largeText = 'x'.repeat(2 ** 25 + 1);
+  assert.equal(canonicalFullReplicaJson(largeText).length, largeText.length + 2);
   let maximum: unknown = null;
   for (let depth = 0; depth < FULL_REPLICA_JSON_LIMITS.depth; depth++) maximum = [maximum];
   assert.doesNotThrow(() => canonicalFullReplicaJson(maximum));

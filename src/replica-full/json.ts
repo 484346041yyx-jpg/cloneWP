@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const FULL_REPLICA_JSON_LIMITS = Object.freeze({ values: 2_000_000, bytes: 32 * 1024 * 1024, depth: 64 });
+export const FULL_REPLICA_JSON_LIMITS = Object.freeze({ values: 2_000_000, depth: 64 });
 
 function fail(code: string): never { throw Error(`replica_full_json_${code}`); }
 
@@ -25,9 +25,7 @@ export function canonicalFullReplicaJson(input: unknown): string {
     ancestors.delete(entry);
     return array ? '[' + items.join(',') + ']' : '{' + items.join(',') + '}';
   };
-  const result = visit(input, 0);
-  if (Buffer.byteLength(result, 'utf8') > FULL_REPLICA_JSON_LIMITS.bytes) fail('limit');
-  return result;
+  return visit(input, 0);
 }
 
 export const fullReplicaJsonHash = (input: unknown): string => createHash('sha256').update(canonicalFullReplicaJson(input)).digest('hex');

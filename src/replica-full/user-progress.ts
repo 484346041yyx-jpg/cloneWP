@@ -23,7 +23,7 @@ const stage = (key: string, label: string, status: UserStageState, detail: strin
 
 /** Five user-facing stages over four internal state machines. Read-only: it
  * never decides completion, only reports where the task actually stands. */
-export function fullReplicaUserProgress(state: FullReplicaRunState, preparation?: PreparationProgress | null, now = Date.now()): UserProgress {
+export function fullReplicaUserProgress(state: FullReplicaRunState, preparation?: PreparationProgress | null, now = Date.now(), delivery?: 'automatic' | 'draft'): UserProgress {
   const checkpoints = state.checkpoints, published = !!checkpoints.published, bound = !!checkpoints.bound;
   const startedWriting = !!(checkpoints.header || checkpoints.page || checkpoints.body || bound);
   const decision = state.review?.decision ?? null, pending = !!state.pending, merged = preparation?.merged === true;
@@ -44,16 +44,16 @@ export function fullReplicaUserProgress(state: FullReplicaRunState, preparation?
     published ? '正文、页眉、菜单已写入' : pending ? '写入结果未知，需要只读对账' : bound ? '正文已写入并绑定页眉' : startedWriting ? stalled ? '写入已中断，等待续跑' : '正在写入 WordPress' : '尚未开始写入');
   const review = stage('review', USER_PROGRESS_STAGES[3],
     published ? 'done' : pending ? 'pending' : bound ? decision === 'changes-required' ? 'blocked' : decision === 'approved' ? 'done' : 'active' : 'pending',
-    published ? '整页视觉与交互已复核' : pending ? '等待写入对账完成' : decision === 'changes-required' ? '复核发现差异，等待判断' : decision === 'approved' ? '复核已通过' : bound ? stalled ? '复核已中断，等待续跑' : '正在核对两桌面截图与交互' : '等待写入完成');
+    published ? '整页视觉与交互已复核' : pending ? '等待写入对账完成' : decision === 'changes-required' ? delivery ? '复核发现差异，继续修正并复查' : '复核发现差异，等待判断' : decision === 'approved' ? '复核已通过' : bound ? stalled ? '复核已中断，等待续跑' : '正在核对两桌面截图与交互' : '等待写入完成');
   const publish = stage('publish', USER_PROGRESS_STAGES[4],
     published ? 'done' : decision === 'approved' ? 'active' : 'pending',
-    published ? `已发布：${checkpoints.published!.publicUrl}` : decision === 'approved' ? '等待发布' : '等待复核通过');
+    published ? `已发布：${checkpoints.published!.publicUrl}` : decision === 'approved' ? delivery === 'draft' ? '按要求保留草稿，继续完成编辑器检查' : delivery === 'automatic' ? '复核通过，自动发布' : '等待发布' : '等待复核通过');
 
   const stages = [capture, layout, write, review, publish];
   const current = pending ? write : decision === 'changes-required' ? review : [...stages].reverse().find(item => item.status !== 'done' && item.status !== 'pending') ?? stages[stages.length - 1];
   const step = published ? 5 : decision === 'approved' ? 5 : pending ? 3 : bound ? 4 : startedWriting ? 3 : 2;
 
-  const needsYou = pending
+  const needsYou = delivery ? null : pending
     ? { action: '确认页面当前状态（只读对账）', reason: '上一次写入结果未知；系统不会自动重试，也不会覆盖你的修改' }
     : decision === 'changes-required' ? { action: '决定是否接受当前差异', reason: '复核发现差异，需要你判断这一版能否上线' }
     : decision === 'approved' && !published ? { action: '确认发布', reason: '复核已通过，等待发布授权' }

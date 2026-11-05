@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { boundaryTableSchema } from './boundaries.js';
 import { z } from 'zod';
+import { effectProbeSchema, effectImplementationSchema } from './effect-trace.js';
 import { taskReviewSkipPolicySchema, assertTaskReviewSkipScope } from '../replica-full/review-skip-policy.js';
 import { native44ProgramSchema } from '../native44/validate.js';
 import { NATIVE44_ARTICLE_LIST_POLICY } from '../native44/types.js';
@@ -10,7 +11,7 @@ import { validateHeaderModulePlan } from '../woodmart-header/generic/contract.js
 import { navigationFormSpecSchema, parseNavigationForms } from '../replica-full/navigation-form/index.js';
 import { nativeImagePolicySchema } from '../replica-full/native-image-policy.js';
 import { configuratorSpecSchema, reusedHeaderResourceSchema } from '../replica-full/contract.js';
-import { assertPageScope, pageScopeSchema, sourcePartitionSchema } from '../replica-full/page-scope.js';
+import { assertPageScope, pageScopeSchema, reservedDraftSchema, sourcePartitionSchema } from '../replica-full/page-scope.js';
 import { BODY_FIDELITY_KINDS, PREPARATION_COMPATIBILITY_KEYS, PREPARATION_DECISION_KEYS, type PreparationJob, type PreparationJobResult, type PreparationPlan } from './types.js';
 import { componentGuidanceReviewSchema } from './component-guidance.js';
 import { isPreparationJobId, preparationExecutionGroups, preparationExecutionPolicySchema } from './execution-policy.js';
@@ -40,6 +41,9 @@ const planSchema = z.object({
   sourceEvidence: ref, sourceFacts: ref, sourceUnits: ref, headerAssets: ref.optional(), bodyAssets: ref,
   bodyBase: native44ProgramSchema.omit({ blocks: true }), headerBase: z.unknown().optional(), reusedHeader: reusedHeaderResourceSchema.optional(), pageScope: pageScopeSchema.optional(),
   sourcePartition: sourcePartitionSchema,
+  deliveryPolicy: z.literal('draft-for-user-review').optional(),
+  workflowDefaults: z.literal('section-roots-target-content-v1').optional(),
+  reservedDraft: reservedDraftSchema.optional(),
   shared: z.object({ decisions: z.array(z.object({ key, value: z.unknown(), evidence: z.array(ref).min(1).max(100) }).strict()).min(1).max(100), compatibility: z.array(z.object({ key: z.enum(PREPARATION_COMPATIBILITY_KEYS), status: z.enum(['verified', 'not-applicable', 'unresolved']), reason: z.string().trim().min(10).max(2000), evidence: z.array(ref).min(1).max(100) }).strict()).length(PREPARATION_COMPATIBILITY_KEYS.length), css }).strict(),
   sections: z.array(section).min(1).max(2000),
   navigationForms: z.array(navigationFormSpecSchema).min(1).max(4).optional(),
@@ -49,8 +53,11 @@ const planSchema = z.object({
   responsive: responsiveSourceSchema.optional(),
   boundaryTable: boundaryTableSchema.optional(),
   executionPolicy: preparationExecutionPolicySchema.optional(),
+  effectTracePolicy: z.literal('source-effect-trace-v1').optional(),
+  effectProbes: z.array(effectProbeSchema).min(1).max(1000).optional(),
+  effectObservations: z.array(ref).min(1).max(30).optional(),
 }).strict();
-const resultSchema = z.object({ version: z.literal(1), kind: z.literal('clonewp-preparation-result'), taskId: key, runId: key, jobId: z.string().refine(isPreparationJobId), contractHash: hash, sharedHash: hash, workRevision: z.number().int().nonnegative().optional(), header: z.unknown().optional(), componentGuidanceReview: componentGuidanceReviewSchema.optional(), sections: z.array(z.object({ key, blocks: z.array(z.unknown()).min(1).max(1000), css, responsive: responsiveSectionSchema.optional(), fidelity: z.array(fidelityResult).optional() }).strict()).min(1).max(2000).optional() }).strict();
+const resultSchema = z.object({ version: z.literal(1), kind: z.literal('clonewp-preparation-result'), taskId: key, runId: key, jobId: z.string().refine(isPreparationJobId), contractHash: hash, sharedHash: hash, workRevision: z.number().int().nonnegative().optional(), header: z.unknown().optional(), componentGuidanceReview: componentGuidanceReviewSchema.optional(), sections: z.array(z.object({ key, blocks: z.array(z.unknown()).min(1).max(1000), css, responsive: responsiveSectionSchema.optional(), fidelity: z.array(fidelityResult).optional(), effectImplementations: z.array(effectImplementationSchema).max(10000).optional() }).strict()).min(1).max(2000).optional() }).strict();
 export function preparationFail(code: string): never { throw Error(`replica_preparation_${code}`); }
 /** Strict bounded canonical JSON, large enough for independent body fragments. */
 export function preparationJson(input: unknown): string {
@@ -80,6 +87,8 @@ export function validatePreparationPlan(input: unknown): PreparationPlan {
   try {
     const value = planSchema.parse(clone(input));
     if (value.executionPolicy && value.version !== 8) preparationFail('execution_policy_version');
+    if ((value.effectTracePolicy || value.effectProbes || value.effectObservations) && value.version !== 8) preparationFail('effect_trace_version');
+    if (value.workflowDefaults && value.version !== 8) preparationFail('workflow_defaults_version');
     if (value.boundaryTable && value.version !== 8) preparationFail('boundary_version');
     assertTaskReviewSkipScope(value);
     if (value.version === 1 ? value.responsive !== undefined : !value.responsive || value.responsive.version !== (value.version >= 3 ? 2 : 1)) preparationFail('responsive_version_contract');
@@ -94,6 +103,7 @@ export function validatePreparationPlan(input: unknown): PreparationPlan {
     if (value.bodyBase.replicationProfile !== 'desktop-browser-v1' || value.bodyBase.editorNaming !== 'native-translated-v1' || value.bodyBase.reviewWorkflow !== 'whole-page-after-css-v1' || value.bodyBase.goalProfile !== NATIVE44_COMPONENT_REFERENCE_GOAL || value.bodyBase.requirementProfile !== NATIVE44_REQUIREMENT_PROFILE || value.bodyBase.articleListPolicy !== NATIVE44_ARTICLE_LIST_POLICY) preparationFail('quality_policy');
     assertPageScope(value, 8);
     if (value.pageScope === 'body-only' && !value.reusedHeader?.footerHash || value.pageScope === undefined && value.reusedHeader?.footerHash) preparationFail('footer_scope_contract');
+    if (value.reusedHeader?.headerId === 'default_header' && value.pageScope !== 'body-only') preparationFail('default_header_scope');
     const partition = value.sourcePartition;
     for (const list of [partition.allUnits, partition.headerUnits, partition.bodyUnits, partition.footerUnits ?? [], partition.unselectedBodyUnits ?? []]) unique(list, 'unit_duplicate');
     if (partition.headerUnits.some(item => partition.bodyUnits.includes(item)) || !sameSet(partition.allUnits, [...partition.headerUnits, ...partition.bodyUnits, ...(partition.footerUnits ?? []), ...(partition.unselectedBodyUnits ?? [])])) preparationFail('unit_partition');
@@ -146,7 +156,7 @@ export function validatePreparationPlan(input: unknown): PreparationPlan {
   } catch (error) { if (error instanceof Error && error.message.startsWith('replica_preparation_')) throw error; return preparationFail('plan_invalid'); }
 }
 export function preparationSharedHash(input: PreparationPlan): string {
-  const plan = validatePreparationPlan(input); return preparationHash({ taskId: plan.taskId, runId: plan.runId, sourceUrl: plan.sourceUrl, targetOrigin: plan.targetOrigin, sourceEvidence: plan.sourceEvidence, sourceFacts: plan.sourceFacts, sourceUnits: plan.sourceUnits, shared: plan.shared, bodyBase: plan.bodyBase, ...(plan.headerBase ? { headerBase: plan.headerBase } : {}), ...(plan.reusedHeader ? { reusedHeader: plan.reusedHeader } : {}), ...(plan.pageScope ? { pageScope: plan.pageScope } : {}), sourcePartition: plan.sourcePartition, sections: plan.sections, ...(plan.boundaryTable ? { boundaryTable: plan.boundaryTable } : {}), ...(plan.executionPolicy ? { executionPolicy: plan.executionPolicy } : {}), ...(plan.navigationForms ? { navigationForms: plan.navigationForms } : {}), ...(plan.configurator ? { configurator: plan.configurator } : {}), ...(plan.reviewSkipPolicy ? { reviewSkipPolicy: plan.reviewSkipPolicy } : {}), ...(plan.nativeImagePolicy ? { nativeImagePolicy: plan.nativeImagePolicy } : {}), ...(plan.responsive ? { responsive: plan.responsive } : {}) });
+  const plan = validatePreparationPlan(input); return preparationHash({ taskId: plan.taskId, runId: plan.runId, sourceUrl: plan.sourceUrl, targetOrigin: plan.targetOrigin, sourceEvidence: plan.sourceEvidence, sourceFacts: plan.sourceFacts, sourceUnits: plan.sourceUnits, shared: plan.shared, bodyBase: plan.bodyBase, ...(plan.headerBase ? { headerBase: plan.headerBase } : {}), ...(plan.reusedHeader ? { reusedHeader: plan.reusedHeader } : {}), ...(plan.pageScope ? { pageScope: plan.pageScope } : {}), sourcePartition: plan.sourcePartition, ...(plan.deliveryPolicy ? { deliveryPolicy: plan.deliveryPolicy } : {}), ...(plan.workflowDefaults ? { workflowDefaults: plan.workflowDefaults } : {}), ...(plan.reservedDraft ? { reservedDraft: plan.reservedDraft } : {}), sections: plan.sections, ...(plan.boundaryTable ? { boundaryTable: plan.boundaryTable } : {}), ...(plan.executionPolicy ? { executionPolicy: plan.executionPolicy } : {}), ...(plan.effectTracePolicy ? { effectTracePolicy: plan.effectTracePolicy } : {}), ...(plan.effectProbes ? { effectProbes: plan.effectProbes } : {}), ...(plan.effectObservations ? { effectObservations: plan.effectObservations } : {}), ...(plan.navigationForms ? { navigationForms: plan.navigationForms } : {}), ...(plan.configurator ? { configurator: plan.configurator } : {}), ...(plan.reviewSkipPolicy ? { reviewSkipPolicy: plan.reviewSkipPolicy } : {}), ...(plan.nativeImagePolicy ? { nativeImagePolicy: plan.nativeImagePolicy } : {}), ...(plan.responsive ? { responsive: plan.responsive } : {}) });
 }
 /** Keep related dependencies together, then balance independent preparation work. */
 export function buildPreparationJobs(input: PreparationPlan): PreparationJob[] {

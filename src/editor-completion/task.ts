@@ -4,7 +4,7 @@ import { readNative44CurrentState } from '../native44/current-state.js';
 import { readNative44Publication } from '../native44/publication.js';
 import { editorCompletionPolicySchema, type EditorScope } from './contract.js';
 import { editorPath } from './store.js';
-const read = async (p: string) => { if ((await stat(p)).size > 32 * 1024 * 1024) throw Error('editor_completion_file_size'); return JSON.parse(await readFile(p, 'utf8')); };
+const read = async (p: string) => { if (!(await stat(p)).isFile()) throw Error('editor_completion_file_size'); return JSON.parse(await readFile(p, 'utf8')); };
 
 export async function readEditorTaskContract(runDir: string) {
   let task: any;

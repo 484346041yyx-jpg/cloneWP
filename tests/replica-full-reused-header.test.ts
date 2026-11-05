@@ -1,10 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { bindReusedHeader, inspectReusedHeader, reusedHeaderPHP, type ReusedHeaderSnapshot } from '../src/replica-full/reused-header.js';
+import { inspectReusedHeaderResources, reusedBodyDriverCode } from '../src/replica-full/reused-driver.js';
 
 const identity = { pageId: 555, runId: 'new-body-run', headerId: 'header_123' };
 const before: ReusedHeaderSnapshot = { ...identity, hash: 'a'.repeat(64), sharedHash: 'b'.repeat(64), documentHash: 'c'.repeat(64), bound: false, template: 'elementor_canvas' };
 const after = { ...before, hash: 'd'.repeat(64), bound: true, template: 'elementor_header_footer' };
+
+test('built-in header is accepted only for body inheritance, not historical explicit binding', async () => {
+  const targetOrigin = 'https://target.example', headerId = 'default_header', mobileMaxWidth = 768;
+  await assert.rejects(reusedBodyDriverCode({ targetOrigin, headerId, mobileMaxWidth }, { action: 'resources' }), /reuse_identity/);
+  assert.throws(() => reusedHeaderPHP({ ...identity, headerId }), /reused_header_identity/);
+  const resource = { headerId, name: 'Default header layout', editUrl: targetOrigin + '/wp-admin/admin.php?page=xts_header_builder#/builder/default_header', sharedHash: 'a'.repeat(64), headerHash: 'b'.repeat(64), footerHash: 'c'.repeat(64), menuHash: 'd'.repeat(64), styleHash: 'e'.repeat(64), menus: [], blocks: [], mobileMaxWidth, hasSubmenus: false };
+  const transport = { origin: targetOrigin, async readPHP<T>({ code }: { code: string }): Promise<T> {
+    const packet = JSON.parse(Buffer.from(code.match(/base64_decode\('([^']+)'\)/)![1], 'base64').toString());
+    assert.deepEqual(packet, { targetOrigin, headerId, mobileMaxWidth, pageScope: 'body-only', action: 'resources' });
+    return { ok: true, value: resource } as T;
+  }, async executePHP(): Promise<never> { assert.fail('inspection must not mutate'); } };
+  assert.deepEqual(await inspectReusedHeaderResources(transport, { headerId, mobileMaxWidth, pageScope: 'body-only' }), resource);
+});
 
 test('reused header rejects invalid identity before invoking PHP', () => {
   assert.throws(() => reusedHeaderPHP({ ...identity, pageId: -1 }));

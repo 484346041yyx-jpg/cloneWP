@@ -1,3 +1,4 @@
+import { effectErrorDetails } from '../replica-preparation/effect-trace.js';
 import path from 'node:path';
 import { assertReplicaSourceSlug } from '../core/replica-url.js';
 import { assertWorkspaceAccess } from '../workspace/service.js';
@@ -6,7 +7,7 @@ import { lstat, mkdir, open, readFile, realpath, rename, statfs, unlink } from '
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { acquireLock } from '../core/files.js';
-import { canonicalFullReplicaJson, FULL_REPLICA_JSON_LIMITS } from './json.js';
+import { canonicalFullReplicaJson } from './json.js';
 import { fullReplicaHash, validateFullReplicaManifest } from './contract.js';
 import { defaultNativeImagePolicy } from './native-image-policy.js';
 import { rebaseFullReplicaCurrentDraft, reconcileFullReplica, reviseFullReplicaConfiguratorCatalog, reviseFullReplicaHeaderStyle, reviseFullReplicaLayout, reviseFullReplicaNativeMotion, reviseFullReplicaNavigationReturn, reviseFullReplicaStyle, runFullReplica } from './coordinator.js';
@@ -73,7 +74,7 @@ async function checkedPath(input: string, allowMissingFinal = false): Promise<st
 }
 async function jsonFile(filename: string): Promise<unknown> {
   const file = await checkedPath(filename), info = await lstat(file);
-  if (!info.isFile() || info.size > FULL_REPLICA_JSON_LIMITS.bytes) throw Error('replica_full_cli_input_invalid');
+  if (!info.isFile()) throw Error('replica_full_cli_input_invalid');
   const input: unknown = JSON.parse(await readFile(file, 'utf8')); canonicalFullReplicaJson(input); return input;
 }
 async function newFile(filename: string, value: unknown): Promise<void> {
@@ -96,9 +97,10 @@ async function manifestAt(filename: string): Promise<FullReplicaManifest> {
     ...(initial.body.navigationForms ? { navigationForms: initial.body.navigationForms.map(form => ({ ...form, sourceEvidence: { ...form.sourceEvidence, path: resolve(form.sourceEvidence.path) } })) } : {}),
   }, ...(initial.header ? { header: { ...initial.header, bundleDirectory: resolve(initial.header.bundleDirectory), assets: { ...initial.header.assets, path: resolve(initial.header.assets.path) } } } : {}) };
   if (manifest.sourcePartition.selection) manifest.sourcePartition = { ...manifest.sourcePartition, selection: { ...manifest.sourcePartition.selection, evidence: { ...manifest.sourcePartition.selection.evidence, path: resolve(manifest.sourcePartition.selection.evidence.path) } } };
+  if (manifest.reservedDraft) manifest.reservedDraft = { ...manifest.reservedDraft, evidence: { ...manifest.reservedDraft.evidence, path: resolve(manifest.reservedDraft.evidence.path) } };
   for (const ref of [manifest.sourceEvidence, manifest.body.program, manifest.body.css, manifest.body.sourceUnits, ...(manifest.body.navigationForms ?? []).map(form => form.sourceEvidence), ...(manifest.header ? [manifest.header.assets] : [])]) {
     const file = await checkedPath(ref.path), info = await lstat(file);
-    if (!info.isFile() || info.size > 32 * 1024 * 1024 || createHash('sha256').update(await readFile(file)).digest('hex') !== ref.sha256) throw Error('replica_full_cli_input_identity_changed');
+    if (!info.isFile() || createHash('sha256').update(await readFile(file)).digest('hex') !== ref.sha256) throw Error('replica_full_cli_input_identity_changed');
   }
   return validateFullReplicaManifest(manifest);
 }
@@ -163,7 +165,8 @@ export async function runFullReplicaCLI(args: string[], services: FullReplicaCLI
     manifest = await manifestAt(path.join(directory, 'manifest.json'));
     state = await jsonFile(path.join(directory, 'state.json')) as FullReplicaRunState;
     if (state.manifestHash !== fullReplicaHash(manifest) || state.taskId !== manifest.taskId || state.runId !== manifest.runId) throw Error('replica_full_cli_run_identity_conflict');
-    if (command === 'status') return { ...await deliverState(state), authority: 'local-confirmed-checkpoints', remoteWrites: 0, userProgress: fullReplicaUserProgress(state, await readPreparationProgress(directory)) };
+    if (command === 'publish' && manifest.deliveryPolicy === 'draft-for-user-review') throw Error('replica_full_draft_publication_forbidden');
+    if (command === 'status') return { ...await deliverState(state), authority: 'local-confirmed-checkpoints', remoteWrites: 0, userProgress: fullReplicaUserProgress(state, await readPreparationProgress(directory), Date.now(), manifest.workflowDefaults && !manifest.reviewSkipPolicy ? manifest.deliveryPolicy === 'draft-for-user-review' ? 'draft' : 'automatic' : undefined) };
     if(command==='recover-style'&&(!state.pending||!(state.pending.phase==='body'&&!state.checkpoints.body&&!state.checkpoints.bound||state.pending.phase==='style-revision'&&!!state.checkpoints.bound&&!state.checkpoints.published)))throw Error('replica_full_style_recovery_pending_body_required');
     if (state.pending && !['reconcile','recover-style','rebase-current-draft'].includes(command)) throw Error('replica_full_reconciliation_required');
     if (!state.pending && command === 'reconcile') throw Error('replica_full_reconciliation_not_pending');
@@ -231,5 +234,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     if (args[0] !== 'status' && status === 'write-unknown') process.exitCode = 2;
     else if (args[0] !== 'status' && ['awaiting-review', 'review-changes-required'].includes(String(status))) process.exitCode = 3;
   }
-  catch (error) { const message = error instanceof Error ? error.message : ''; console.error(JSON.stringify({ error: /^(?:replica_full|woodmart_header|workspace)_[A-Za-z0-9_-]+$/.test(message) ? message : 'replica_full_cli_failed' })); process.exitCode = 1; }
+  catch (error) { const message = error instanceof Error ? error.message : ''; const effect = effectErrorDetails(error); if (effect) { console.error(JSON.stringify({ error: 'replica_effect_trace', ...effect })); } else console.error(JSON.stringify({ error: /^(?:replica_full|woodmart_header|workspace)_[A-Za-z0-9_-]+$/.test(message) ? message : 'replica_full_cli_failed' })); process.exitCode = 1; }
 }

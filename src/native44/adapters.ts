@@ -68,7 +68,13 @@ export function adaptNative44Products(node:Native44Products,schema:LegacySchema,
   const query=node.query!,ids=selected(query,catalog,used,node.key);
   if(node.widgetType==='wd_products'){
     requireControls(schema.controls,['post_type','include','items_per_page','orderby'],node.key);forbidFilters(node.widgetSettings,node.key);
-    const settings=mergeFrozen(node.widgetSettings,{post_type:'ids',include:ids,items_per_page:ids.length,orderby:'date'},node.key);receipt(query,ids,settings);return{settings,receipts};
+    // Elementor stores the unchecked switcher as an empty string. Older
+    // authoring plans use WoodMart's "no" spelling for a single-card advance.
+    // Keep the switch explicitly off: omitting it would enable the live default.
+    const scroll = schema.controls.scroll_per_page;
+    const inputs = node.widgetSettings.layout==='carousel' && node.widgetSettings.scroll_per_page==='no' && scroll?.type==='switcher' && scroll.default==='yes'
+      ? {...node.widgetSettings,scroll_per_page:''} : node.widgetSettings;
+    const settings=mergeFrozen(inputs,{post_type:'ids',include:ids,items_per_page:ids.length,orderby:'date'},node.key);receipt(query,ids,settings);return{settings,receipts};
   }
   requireControls(schema.controls,['query_post_type','query_posts_ids','query_orderby','query_order','columns','rows'],node.key);forbidFilters(node.widgetSettings,node.key,'query_');
   const options=schema.controls.query_orderby.options??{};const orderby=Object.hasOwn(options,'date')?'date':Object.hasOwn(options,'post_date')?'post_date':undefined;if(!orderby)throw new Error(`WooCommerce date ordering is not registered: ${node.key}`);

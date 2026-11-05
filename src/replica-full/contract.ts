@@ -11,7 +11,7 @@ import { responsiveBodyPlanSchema, requiredReplicaViewports } from '../replica-r
 import { CURRENT_REPLICA_WORKFLOW_VERSION } from '../replica-responsive/defaults.js';
 import { editorCompletionPolicySchema } from '../editor-completion/contract.js';
 import { assertReadonlyHeaderDecisionScope } from '../replica-responsive/decisions.js';
-import { assertPageScope, pageScopeSchema, sourcePartitionSchema } from './page-scope.js';
+import { assertPageScope, pageScopeSchema, reservedDraftSchema, sourcePartitionSchema } from './page-scope.js';
 import { currentProductSelectionSchema } from '../native44/current-product.js';
 import { assertProductExtensionReference } from '../native44/product-extension.js';
 
@@ -32,7 +32,7 @@ const unit = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/);
 const partition = sourcePartitionSchema;
 const resourceURL = z.url().refine(value => { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !/(?:token|nonce|password|authorization|secret|signature|session)=/i.test(url.search); });
 const resource = z.object({ id: z.number().int().positive(), name: z.string().trim().min(1).max(200), editUrl: resourceURL }).strict();
-export const reusedHeaderResourceSchema = z.object({ headerId: z.string().regex(/^header_[1-9]\d{0,17}$/), name: z.string().trim().min(1).max(200), editUrl: resourceURL, sharedHash: sha, headerHash: sha, menuHash: sha, styleHash: sha, menus: z.array(resource.extend({ key })).max(100), blocks: z.array(resource).max(100), mobileMaxWidth: z.number().int().min(320).max(1024), hasSubmenus: z.boolean(), footerHash: sha.optional() }).strict();
+export const reusedHeaderResourceSchema = z.object({ headerId: z.string().regex(/^(?:header_[1-9]\d{0,17}|default_header)$/), name: z.string().trim().min(1).max(200), editUrl: resourceURL, sharedHash: sha, headerHash: sha, menuHash: sha, styleHash: sha, menus: z.array(resource.extend({ key })).max(100), blocks: z.array(resource).max(100), mobileMaxWidth: z.number().int().min(320).max(1024), hasSubmenus: z.boolean(), footerHash: sha.optional() }).strict();
 const manifestSchema = z.object({
   componentExtension: FullReplicaFileRefSchema.optional(),currentRecord: currentProductSelectionSchema.optional(),
   version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).default(CURRENT_REPLICA_WORKFLOW_VERSION), kind: z.literal('clonewp-full-replica'), taskId: key, runId: key,
@@ -41,12 +41,15 @@ const manifestSchema = z.object({
   headerProvider: z.enum(['woodmart-header-builder', 'component', 'reused-woodmart-header']).default('woodmart-header-builder'),
   reusedHeader: reusedHeaderResourceSchema.optional(),
   pageScope: pageScopeSchema.optional(),
-  deliveryPolicy: z.literal('publish-after-review').default('publish-after-review'),
+  deliveryPolicy: z.enum(['publish-after-review', 'draft-for-user-review']).default('publish-after-review'),
+  workflowDefaults: z.literal('section-roots-target-content-v1').optional(),
+  reservedDraft: reservedDraftSchema.optional(),
   reviewSkipPolicy: taskReviewSkipPolicySchema.optional(),
   nativeImagePolicy: nativeImagePolicySchema.optional(),
   editorCompletionPolicy: editorCompletionPolicySchema.optional(),
   responsive: responsiveBodyPlanSchema.optional(),
   sourceEvidence: FullReplicaFileRefSchema,
+  effectTrace: FullReplicaFileRefSchema.optional(),
   sourcePartition: partition,
   header: z.object({ plan: z.unknown(), bundleDirectory: z.string().min(1).max(4096), assets: FullReplicaFileRefSchema }).strict().optional(),
   body: z.object({ program: FullReplicaFileRefSchema, css: FullReplicaFileRefSchema, sourceUnits: FullReplicaFileRefSchema, navigationForms: z.array(navigationFormSpecSchema).min(1).max(4).optional(), configurator: configuratorSpecSchema.optional() }).strict(),
@@ -76,6 +79,7 @@ export function validateFullReplicaManifest(input: unknown): FullReplicaManifest
   }
   assertPageScope(parsed, 4);
   if (parsed.pageScope === 'body-only' && !parsed.reusedHeader?.footerHash || parsed.pageScope === undefined && parsed.reusedHeader?.footerHash) fail('footer_scope_contract');
+  if (parsed.reusedHeader?.headerId === 'default_header' && (parsed.pageScope !== 'body-only' || parsed.currentRecord)) fail('default_header_scope');
   validateReplicaHeaderChoice({ version: 1, kind: 'clonewp-replica-header-choice', provider: parsed.headerProvider === 'reused-woodmart-header' ? 'woodmart-header-builder' : parsed.headerProvider, sourcePartition: parsed.pageScope === 'body-only' ? { allUnits: [...parsed.sourcePartition.headerUnits, ...parsed.sourcePartition.bodyUnits], headerUnits: parsed.sourcePartition.headerUnits, bodyUnits: parsed.sourcePartition.bodyUnits } : parsed.sourcePartition });
   if (parsed.headerProvider === 'reused-woodmart-header') {
     if (parsed.version !== 4 || parsed.header || !parsed.reusedHeader || parsed.reusedHeader.mobileMaxWidth !== parsed.responsive?.mobileMaxWidth) fail('reused_header_contract');

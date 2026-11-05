@@ -3,15 +3,24 @@ try {
   $origin=untrailingslashit(home_url('/'));$hid=$input['headerId'];
   if(isset($input['pageScope'])&&$input['pageScope']!=='body-only')throw new RuntimeException('reuse_page_scope');
   $bodyOnly=($input['pageScope']??null)==='body-only';$footerOff=$bodyOnly?'':'1';
-  if($origin!==$input['targetOrigin']||!preg_match('/^header_[1-9][0-9]{0,17}$/D',$hid))throw new RuntimeException('reuse_identity');
+  $inheritsDefault=$hid==='default_header';
+  if($origin!==$input['targetOrigin']||!($inheritsDefault?$bodyOnly&&!isset($input['currentRecord']):preg_match('/^header_[1-9][0-9]{0,17}$/D',$hid)))throw new RuntimeException('reuse_identity');
   $normalize=static function($value)use(&$normalize){if(is_object($value))$value=get_object_vars($value);if(!is_array($value))return $value;$list=array_is_list($value);foreach($value as $key=>$child)$value[$key]=$normalize($child);if(!$list)ksort($value,SORT_STRING);return $value;};
   $digest=static fn($value)=>hash('sha256',json_encode($normalize($value),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
-  $resources=static function()use($hid,$origin,$digest,$input,$bodyOnly){
-    $raw=get_option('whb_'.$hid);$decoded=is_string($raw)?json_decode($raw,true):$raw;if(!is_array($decoded)||($decoded['id']??null)!==$hid||!is_string($decoded['name']??null))throw new RuntimeException('reuse_header_missing');
+  $resources=static function()use($hid,$origin,$digest,$input,$bodyOnly,$inheritsDefault){
+    $raw=get_option('whb_'.$hid);$decoded=is_string($raw)?json_decode($raw,true):$raw;
+    if($inheritsDefault){
+      $themeHeader=get_option('xts-woodmart-options',[])['default_header']??'';
+      if(get_option('whb_main_header')!==$hid||!in_array($themeHeader,['',null,false,$hid],true))throw new RuntimeException('reuse_site_default_changed');
+      if(!class_exists('\\XTS\\Modules\\Header_Builder')||($raw!==false&&$raw!==null&&(!is_array($decoded)||($decoded['id']??null)!==$hid)))throw new RuntimeException('reuse_header_missing');
+      $decoded=\XTS\Modules\Header_Builder::get_instance()->factory->get_header($hid)->get_data();
+    }
+    if(!is_array($decoded)||($decoded['id']??null)!==$hid||!is_string($decoded['name']??null))throw new RuntimeException('reuse_header_missing');
     $menus=[];$blocks=[];$hasSubmenus=false;
     $walk=null;$addBlock=static function($id)use(&$blocks,&$walk,$origin){$id=(int)$id;if(isset($blocks[(string)$id]))return;if(count($blocks)>=100)throw new RuntimeException('reuse_block_limit');$block=get_post($id);if(!$block||$block->post_type!=='cms_block')throw new RuntimeException('reuse_block_missing');$meta=get_post_meta($block->ID);$blocks[(string)$block->ID]=['id'=>(int)$block->ID,'name'=>$block->post_title,'editUrl'=>$origin.'/wp-admin/post.php?post='.$block->ID.'&action=edit','proof'=>[$block,$meta]];if($walk){$walk($block->post_content);$walk($meta);}};
     $walk=static function($node)use(&$walk,$addBlock,&$menus,&$hasSubmenus,$origin){if(is_string($node)){if(preg_match_all('~\[(?:html_block|woodmart_html_block)\b[^\]]*\bid=["\x27]?([0-9]+)~i',$node,$matches))foreach($matches[1] as $id)$addBlock($id);return;}if(!is_array($node))return;foreach($node['params']??[] as $key=>$param){$value=$param['value']??null;if($key==='menu_id'&&$value){$menu=wp_get_nav_menu_object($value);if(!$menu)throw new RuntimeException('reuse_menu_missing');$items=wp_get_nav_menu_items($menu->term_id,['post_status'=>'any'])?:[];$data=[];foreach($items as $item){$data[]=[$item,get_post_meta($item->ID)];$blockId=(int)get_post_meta($item->ID,'_menu_item_block',true);if($blockId)$addBlock($blockId);if((int)$item->menu_item_parent>0)$hasSubmenus=true;}$menus[(string)$menu->term_id]=['id'=>(int)$menu->term_id,'name'=>$menu->name,'editUrl'=>$origin.'/wp-admin/nav-menus.php?menu='.$menu->term_id,'key'=>'menu_'.$menu->term_id,'proof'=>[$menu,$data]];}if(($key==='block_id'||$key==='search_extra_content'&&strtolower((string)($node['type']??''))==='search')&&$value)$addBlock($value);}foreach($node as $child)$walk($child);};$walk($decoded);ksort($menus);ksort($blocks);
     $headerHash=$digest($raw);$menuHash=$digest($menus);$styleHash=$digest($blocks);$sharedHash=$digest([$raw,$menus,$blocks,get_option('whb_main_header'),get_option('whb_saved_headers'),get_option('xts-woodmart-options'),get_option('woodmart_options'),get_option('xts-'.$hid.'-file-data'),get_option('xts-'.$hid.'-css-data')]);
+    if($inheritsDefault){$headerHash=$digest([$raw,$decoded]);$sharedHash=$digest([$sharedHash,$headerHash,get_nav_menu_locations()]);}
     $footer=[];
     if($bodyOnly){
       $theme=get_option('xts-woodmart-options');if(!is_array($theme))throw new RuntimeException('reuse_footer_settings_missing');
@@ -43,21 +52,38 @@ try {
     return ['headerId'=>$hid,'name'=>$decoded['name'],'editUrl'=>$origin.'/wp-admin/admin.php?page=xts_header_builder#/builder/'.$hid,'sharedHash'=>$sharedHash,'headerHash'=>$headerHash,'menuHash'=>$menuHash,'styleHash'=>$styleHash,'menus'=>array_values($menus),'blocks'=>array_values($blocks),'mobileMaxWidth'=>$input['mobileMaxWidth'],'hasSubmenus'=>$hasSubmenus]+$footer;
   };
   if($input['action']==='resources')return ['ok'=>true,'value'=>$resources()];
+  $defaultHeaderValue=static function($doc){
+    $stack=$doc->get_stack();$control=$stack['controls']['wd__woodmart_whb_header']??$stack['style_controls']['wd__woodmart_whb_header']??null;$default=$control['default']??'';
+    if(($control['type']??null)!=='select'||!is_string($default)||($default!==''&&(!in_array($default,['default','default_header','none'],true)||!array_key_exists($default,$control['options']??[]))))throw new RuntimeException('reuse_inheritance_control');
+    return $default;
+  };
   $plugin=\Elementor\Plugin::$instance;$responsiveMode=$plugin->breakpoints->get_responsive_control_duplication_mode();$frontendProperty=new ReflectionProperty('Elementor\Core\Frontend\Performance','is_frontend');$frontendProperty->setAccessible(true);$frontendMode=$frontendProperty->getValue();$hadPost=array_key_exists('post',$GLOBALS);$previousPost=$GLOBALS['post']??null;
   try{
 
   $nativeProduct=isset($input['currentRecord']);$postType=$nativeProduct?'woodmart_layout':'page';
   if($nativeProduct&&(!post_type_exists('woodmart_layout')||!class_exists('XTS\\Modules\\Layouts\\Single_Product')||($input['currentRecord']['recordType']??null)!=='product'))throw new RuntimeException('native_product_template_provider_missing');
   $run=$input['runId'];$contract=$input['contractHash'];if(!preg_match('/^[A-Za-z0-9_-]{4,100}$/D',$run)||!preg_match('/^[a-f0-9]{64}$/D',$contract))throw new RuntimeException('reuse_task_identity');$option='clonewp_reused_body_'.hash('sha256',$origin.'|'.$run);
-  $inspect=static function()use($run,$contract,$resources,$option,$digest,$plugin,$frontendProperty,$nativeProduct,$postType){
+  $reservation=$input['reservedDraft']??null;
+  if($reservation!==null&&(!$bodyOnly||$nativeProduct||!is_int($reservation['pageId']??null)||$reservation['pageId']<1||!preg_match('/^[a-f0-9-]{36}$/D',$reservation['operationId']??'')||!preg_match('/^[a-z0-9][a-z0-9-]{0,119}$/D',$reservation['slug']??'')||!is_string($reservation['title']??null)||$input['action']==='publish'))throw new RuntimeException('reuse_reserved_draft_scope');
+  $inspect=static function()use($run,$contract,$resources,$option,$digest,$plugin,$frontendProperty,$nativeProduct,$postType,$reservation,$inheritsDefault,$hid,$defaultHeaderValue){
     $resource=$resources();$pages=get_posts(['post_type'=>$postType,'post_status'=>'any','fields'=>'ids','numberposts'=>2,'meta_key'=>'_clonewp_run_id','meta_value'=>$run]);if(count($pages)>1)throw new RuntimeException('reuse_ambiguous_page');$page=null;
     if($pages){
-      $id=(int)$pages[0];if($nativeProduct)foreach((array)get_option('wd_layouts_conditions',[]) as $layouts)if(!empty($layouts[$id]))throw new RuntimeException('native_product_template_has_display_conditions');if(get_post_meta($id,'_clonewp_reused_header_contract',true)!==$contract||!current_user_can('edit_post',$id))throw new RuntimeException('reuse_page_owner');if($nativeProduct&&get_post_meta($id,'wd_layout_type',true)!=='single_product')throw new RuntimeException('native_product_template_owner');$post=get_post($id);$GLOBALS['post']=$post;
+      $id=(int)$pages[0];if($nativeProduct)foreach((array)get_option('wd_layouts_conditions',[]) as $layouts)if(!empty($layouts[$id]))throw new RuntimeException('native_product_template_has_display_conditions');
+      $storedContract=get_post_meta($id,'_clonewp_reused_header_contract',true);
+      if($reservation!==null&&($id!==$reservation['pageId']||get_post_meta($id,'_clonewp_draft_reservation_operation',true)!==$reservation['operationId']))throw new RuntimeException('reuse_reserved_draft_identity');
+      if(($storedContract!==$contract&&($reservation===null||$storedContract!==''))||!current_user_can('edit_post',$id))throw new RuntimeException('reuse_page_owner');if($nativeProduct&&get_post_meta($id,'wd_layout_type',true)!=='single_product')throw new RuntimeException('native_product_template_owner');$post=get_post($id);$GLOBALS['post']=$post;
+      if($reservation!==null&&(!$post||$post->post_status!=='draft'||$post->post_name!==$reservation['slug']||$post->post_title!==$reservation['title']))throw new RuntimeException('reuse_reserved_draft_identity');
       $stored=get_post_meta($id,'_elementor_page_settings',true);$editorContext=is_array($stored)&&is_string($stored['custom_css']??null)&&$stored['custom_css']!=='';$priorFrontend=$frontendProperty->getValue();$priorResponsive=$plugin->breakpoints->get_responsive_control_duplication_mode();
       if($editorContext){$frontendProperty->setValue(null,false);$plugin->breakpoints->set_responsive_control_duplication_mode('off');$plugin->controls_manager->clear_stack_cache();}
       try{$doc=$plugin->documents->get($id,false);if(!$doc||!$doc->is_built_with_elementor())throw new RuntimeException('reuse_document');$elements=$doc->get_elements_data();$settings=$doc->get_settings();}
       finally{if($editorContext){$frontendProperty->setValue(null,$priorFrontend);$plugin->breakpoints->set_responsive_control_duplication_mode($priorResponsive);$plugin->controls_manager->clear_stack_cache();}}
-      $bodySettings=$settings;if($post->post_status==='publish'&&($bodySettings['post_status']??null)==='publish')$bodySettings['post_status']='draft';$header=get_post_meta($id,'_woodmart_whb_header',true)?:null;$flags=[];foreach(['_woodmart_title_off','_woodmart_prefooter_off','_woodmart_footer_off','_woodmart_copyrights_off','_woodmart_main_layout'] as $key)$flags[$key]=(string)get_post_meta($id,$key,true);$page=['pageId'=>$id,'runId'=>$run,'status'=>$post->post_status,'title'=>$post->post_title,'slug'=>$post->post_name,'template'=>(string)get_post_meta($id,'_wp_page_template',true),'headerId'=>$header,'elements'=>$elements,'settings'=>$settings,'bodyHash'=>$digest([$post->post_title,$post->post_content,$post->post_excerpt,$post->post_name,$elements,$bodySettings]),'documentHash'=>$digest([$elements,$settings]),'publicUrl'=>get_permalink($id),'metaHash'=>$digest(get_post_meta($id)),'flags'=>$flags];
+      $bodySettings=$settings;if($post->post_status==='publish'&&($bodySettings['post_status']??null)==='publish')$bodySettings['post_status']='draft';$header=get_post_meta($id,'_woodmart_whb_header',true)?:null;
+      if($inheritsDefault){
+        $default=$defaultHeaderValue($doc);$marker=get_post_meta($id,'_clonewp_inherits_default_header',true);
+        if(!in_array($header,[null,$default],true)||!in_array($settings['wd__woodmart_whb_header']??null,['',null,$default],true)||!in_array($marker,['',$contract],true))throw new RuntimeException('reuse_inheritance_changed');
+        $header=$marker===$contract?$hid:null;
+      }
+      $flags=[];foreach(['_woodmart_title_off','_woodmart_prefooter_off','_woodmart_footer_off','_woodmart_copyrights_off','_woodmart_main_layout'] as $key)$flags[$key]=(string)get_post_meta($id,$key,true);$page=['pageId'=>$id,'runId'=>$run,'status'=>$post->post_status,'title'=>$post->post_title,'slug'=>$post->post_name,'template'=>(string)get_post_meta($id,'_wp_page_template',true),'headerId'=>$header,'elements'=>$elements,'settings'=>$settings,'bodyHash'=>$digest([$post->post_title,$post->post_content,$post->post_excerpt,$post->post_name,$elements,$bodySettings]),'documentHash'=>$digest([$elements,$settings]),'publicUrl'=>get_permalink($id),'metaHash'=>$digest(get_post_meta($id)),'flags'=>$flags];
     }
     $value=['resources'=>$resource,'page'=>$page,'receipts'=>(object)(get_option($option,[])?:[])];$value['hash']=$digest($value);return $value;
   };
@@ -85,15 +111,26 @@ try {
   try{
     $fresh=$inspect();if($fresh['hash']!==$before['hash'])throw new RuntimeException('reuse_snapshot_changed');$page=$before['page'];
     if($action==='create-page'){
-      if($page||!preg_match('/^[a-z0-9][a-z0-9-]{0,119}$/D',$payload['slug'])||trim($payload['title'])==='')throw new RuntimeException('reuse_page_occupied');$nativeSlug=wp_unique_post_slug(sanitize_title($payload['slug']),0,'publish',$postType,0);
+      if($reservation!==null){
+        if(!$page||$page['pageId']!==$reservation['pageId']||$payload['slug']!==$reservation['slug']||$payload['title']!==$reservation['title']||$page['headerId']!==null||$page['template']!=='elementor_header_footer'||$page['elements']||($page['settings']['custom_css']??'')!==''||metadata_exists('post',$page['pageId'],'_clonewp_reused_header_contract')||$before['receipts']!=(object)[])throw new RuntimeException('reuse_reserved_draft_not_empty');
+        $post=get_post($page['pageId']);
+        if(!function_exists('wp_check_post_lock'))require_once ABSPATH.'wp-admin/includes/post.php';
+        $editLock=get_post_meta($page['pageId'],'_edit_lock',true);
+        if((int)$post->post_parent!==0||$post->post_content!==''||$post->post_excerpt!==''||($editLock!==''&&(!preg_match('/^([0-9]+):[0-9]+$/D',$editLock,$parts)||time()-(int)$parts[1]<150))||wp_get_post_autosave($page['pageId']))throw new RuntimeException('reuse_reserved_draft_changed');
+      }else{
+        if($page||!preg_match('/^[a-z0-9][a-z0-9-]{0,119}$/D',$payload['slug'])||trim($payload['title'])==='')throw new RuntimeException('reuse_page_occupied');$nativeSlug=wp_unique_post_slug(sanitize_title($payload['slug']),0,'publish',$postType,0);
+      }
     }else{
+      if($reservation!==null&&(!$page||get_post_meta($page['pageId'],'_clonewp_reused_header_contract',true)!==$contract))throw new RuntimeException('reuse_reserved_draft_unbound');
       if(!$page||$page['pageId']!==$payload['pageId']||$page['status']!=='draft')throw new RuntimeException('reuse_owned_draft');if(!function_exists('wp_check_post_lock'))require_once ABSPATH.'wp-admin/includes/post.php';if(wp_check_post_lock($page['pageId']))throw new RuntimeException('reuse_edit_lock');
       if($action==='style'&&(!is_string($payload['css']??null)||strlen($payload['css'])>1048576||str_contains($payload['css'],'<')||str_contains($payload['css'],"\0")))throw new RuntimeException('reuse_css_invalid');
       if($action==='publish'&&!current_user_can('publish_pages'))throw new RuntimeException('reuse_publish_permission');
       if($action==='bind'&&$page['headerId']!==null||$action==='publish'&&($page['headerId']!==$hid||!(isset($input['publicationAuthorizationHash']) ? ((($run==='huaqi-about-20261023-body'||$run==='huaqi-perfume-20261024-body'||$run==='huaqi-cosmetic-20261024-body')&&$hid==='header_39589520821341414'&&$origin==='https://vapeversse.com'||$run==='huaqi-product-layout-jiangubottle-20261028'&&$hid==='header_196552'&&$origin==='https://jiangubottle.com')&&preg_match('/^[a-f0-9]{64}$/D',$input['publicationAuthorizationHash'])&&($payload['publicationAuthorizationHash']??null)===$input['publicationAuthorizationHash']) : preg_match('/^[a-f0-9]{64}$/D',$payload['reviewHash']??''))))throw new RuntimeException('reuse_binding_precondition');
     }
     $receipts=(array)$before['receipts'];$receipts[$operation]=['action'=>$action,'payloadHash'=>$digest($payload),'state'=>'started'];update_option($option,$receipts,false);
-    if($action==='create-page'){
+    if($action==='create-page'&&$reservation!==null){
+      $id=$page['pageId'];if(!add_post_meta($id,'_clonewp_reused_header_contract',$contract,true))throw new RuntimeException('reuse_reserved_draft_bind_unknown');$result=['pageId'=>$id];
+    }elseif($action==='create-page'){
       $id=wp_insert_post(['post_type'=>$postType,'post_status'=>'draft','post_title'=>$payload['title'],'post_name'=>$nativeSlug,'post_content'=>'','meta_input'=>['_clonewp_run_id'=>$run,'_clonewp_reused_header_contract'=>$contract,'_wp_page_template'=>'elementor_header_footer','_woodmart_title_off'=>'1','_woodmart_main_layout'=>'full-width','_woodmart_prefooter_off'=>$footerOff,'_woodmart_footer_off'=>$footerOff,'_woodmart_copyrights_off'=>$footerOff,'rank_math_robots'=>['noindex','nofollow']]],true);if(is_wp_error($id))throw new RuntimeException('reuse_create_unknown');if($nativeProduct)update_post_meta($id,'wd_layout_type','single_product');$doc=\Elementor\Plugin::$instance->documents->get($id);$doc->set_is_built_with_elementor(true);if(!$doc->save(['elements'=>[],'settings'=>['template'=>'elementor_header_footer','hide_title'=>'yes']]))throw new RuntimeException('reuse_create_unknown');$result=['pageId'=>(int)$id];
     }elseif(in_array($action,['style','bind'],true)){
       $id=$page['pageId'];$frontendProperty->setValue(null,false);$plugin->breakpoints->set_responsive_control_duplication_mode('off');$plugin->controls_manager->clear_stack_cache();$doc=\Elementor\Plugin::$instance->documents->get($id,false);$settings=$page['settings'];$settings['template']='elementor_header_footer';$settings['hide_title']='yes';
@@ -102,14 +139,18 @@ try {
         $stack=$doc->get_stack();$controls=array_merge($stack['controls']??[],$stack['style_controls']??[]);$switcher=\Elementor\Plugin::$instance->controls_manager->get_control('switcher');
         if(!$nativeProduct){
           foreach(['wd__woodmart_title_off','wd__woodmart_footer_off','wd__woodmart_prefooter_off','wd__woodmart_copyrights_off'] as $key){$control=$controls[$key]??null;$enabled=$control['return_value']??($switcher?$switcher->get_settings('return_value'):null);if(($control['type']??'')!=='switcher'||!is_string($enabled)||$enabled==='')throw new RuntimeException('reuse_shell_control');$settings[$key]=$bodyOnly&&$key!=='wd__woodmart_title_off'?'':$enabled;}
-          if(($controls['wd__woodmart_main_layout']['type']??'')!=='select'||!array_key_exists('full-width',$controls['wd__woodmart_main_layout']['options']??[]))throw new RuntimeException('reuse_shell_layout');$settings['wd__woodmart_main_layout']='full-width';$settings['wd__woodmart_whb_header']=$hid;
+          if(($controls['wd__woodmart_main_layout']['type']??'')!=='select'||!array_key_exists('full-width',$controls['wd__woodmart_main_layout']['options']??[]))throw new RuntimeException('reuse_shell_layout');$settings['wd__woodmart_main_layout']='full-width';$settings['wd__woodmart_whb_header']=$inheritsDefault?$defaultHeaderValue($doc):$hid;
         }
         if($action==='style'&&($controls['custom_css']['type']??'')!=='code')throw new RuntimeException('reuse_css_control');
       }
       $expectedElements=$page['elements'];
       if($action==='style'&&$nativeProduct)delete_post_meta($id,'_elementor_element_cache');
       if(!$doc->save(['elements'=>$expectedElements,'settings'=>$settings]))throw new RuntimeException('reuse_save_unknown');
-      update_post_meta($id,'_wp_page_template','elementor_header_footer');if($action==='bind')update_post_meta($id,'_woodmart_whb_header',$hid);
+      update_post_meta($id,'_wp_page_template','elementor_header_footer');
+      if($action==='bind'){
+        if($inheritsDefault){if(!add_post_meta($id,'_clonewp_inherits_default_header',$contract,true))throw new RuntimeException('reuse_inheritance_receipt');}
+        else update_post_meta($id,'_woodmart_whb_header',$hid);
+      }
       // Elementor Pro's CSS hook reads the document manager; the saved instance
       // may still hold parsed settings from before this settings-only save.
       $doc=$plugin->documents->get($id,false);
@@ -117,7 +158,8 @@ try {
       if(class_exists('\Elementor\Core\Files\CSS\Post'))(new \Elementor\Core\Files\CSS\Post($id))->update();
       $check=$inspect();if($digest($check['page']['elements'])!==$digest($expectedElements)||$digest($check['page']['settings'])!==$digest($settings))throw new RuntimeException('reuse_document_readback');
       if($action==='bind'){
-        $shell=['_woodmart_whb_header'=>$hid];
+        $shell=$inheritsDefault?[]:['_woodmart_whb_header'=>$hid];
+        if($inheritsDefault&&($check['page']['headerId']??null)!==$hid)throw new RuntimeException('reuse_inheritance_readback');
         if(!$nativeProduct)$shell+=['_woodmart_title_off'=>$settings['wd__woodmart_title_off'],'_woodmart_main_layout'=>'full-width','_woodmart_prefooter_off'=>$settings['wd__woodmart_prefooter_off'],'_woodmart_footer_off'=>$settings['wd__woodmart_footer_off'],'_woodmart_copyrights_off'=>$settings['wd__woodmart_copyrights_off']];
         foreach($shell as $key=>$wanted)if(!function_exists('woodmart_get_post_meta_value')||woodmart_get_post_meta_value($id,$key)!==$wanted)throw new RuntimeException('reuse_effective_shell');
       }

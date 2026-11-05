@@ -1,3 +1,4 @@
+import { effectErrorDetails } from '../replica-preparation/effect-trace.js';
 import path from 'node:path';
 import { assertReplicaSourceSlug } from '../core/replica-url.js';
 import { validatePreparationPlan } from './contract.js';
@@ -83,6 +84,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     else if ((result as { status?: string }).status === 'failed') process.exitCode = 1;
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    console.error(JSON.stringify({ error: /^(?:replica_(?:preparation|responsive)|workspace)_[a-z0-9_]+$/.test(message) ? message : 'replica_preparation_failed' })); process.exitCode = 1;
+    const effect = effectErrorDetails(error); if (effect) { console.error(JSON.stringify({ error: 'replica_effect_trace', ...effect })); } else console.error(JSON.stringify({ error: /^(?:replica_(?:preparation|responsive)|workspace)_[a-z0-9_]+$/.test(message) ? message : 'replica_preparation_failed' })); process.exitCode = 1;
   }
 }

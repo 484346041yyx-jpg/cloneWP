@@ -54,6 +54,7 @@ import { prepareHeaderMenuContentLocal } from '../woodmart-header/generic/menu-c
 import { verifyFullReplicaVisualReview, verifyFullReplicaPhoneVisualReview } from './visual-review.js';
 import { verifyResponsiveSource } from '../replica-responsive/source.js';
 import { carouselMotionFrameSchema, compareCarouselMotion, verifyPhoneMotionSource } from '../replica-responsive/motion-review.js';
+import { verifyEffectReview } from '../replica-preparation/effect-review.js';
 import { native44Id, native44ModuleClass } from '../native44/adapters.js';
 import { compileEditorElements } from '../wordpress/editor-serialization.js';
 import { validateRegisteredSettings } from '../planning/plan.js';
@@ -130,7 +131,7 @@ async function readBound(ref: FullReplicaFileRef, base = ROOT): Promise<{ filena
   fileRef.parse({ path: ref.path, sha256: ref.sha256 }); const filename = await checkedPath(path.resolve(base, ref.path)), info = await lstat(filename);
   const reader = activeVerifiedEvidenceReader(ROOT);
   if (reader) return { filename, bytes: await reader.read({ path: filename, sha256: ref.sha256 }) };
-  if (!info.isFile() || info.size > 32 * 1024 * 1024) fail('file_limit'); const bytes = await readFile(filename); if (digest(bytes) !== ref.sha256) fail('input_changed'); return { filename, bytes };
+  if (!info.isFile()) fail('file_limit'); const bytes = await readFile(filename); if (digest(bytes) !== ref.sha256) fail('input_changed'); return { filename, bytes };
 }
 async function space(directory: string): Promise<void> { const info = await statfs(directory); if (info.bavail * info.bsize < 512 * 1024 * 1024) fail('evidence_space'); }
 async function writeNew(filename: string, value: unknown): Promise<FullReplicaFileRef> {
@@ -243,7 +244,7 @@ export async function createFullReplicaDependencies(options: FullReplicaFactoryO
     if (!claimed.has(pageId)) { const result = await services.client.createDraft(manifest.runId, manifest.title, { requireExistingPageId: pageId, ...(manifest.currentRecord?{currentRecord:manifest.currentRecord}:{}) }); if (result.pageId !== pageId) fail('claim_page_changed'); claimed.add(pageId); } return capabilities;
   };
   const confirmedLedger = async (directory: string, pageId: number, assets: Native44Asset[], required: string[]): Promise<ImportedAssetV2[] | null> => {
-    let ledger: any; try { const filename = await checkedPath(path.join(runDirectory, directory, 'assets', 'ledger.json')), info = await lstat(filename); if (!info.isFile() || info.size > 32 * 1024 * 1024) return null; ledger = JSON.parse(await readFile(filename, 'utf8')); }
+    let ledger: any; try { const filename = await checkedPath(path.join(runDirectory, directory, 'assets', 'ledger.json')), info = await lstat(filename); if (!info.isFile()) return null; ledger = JSON.parse(await readFile(filename, 'utf8')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return required.length ? null : []; throw error; }
     if (ledger?.version !== 1 || ledger.runId !== manifest.runId || ledger.pageId !== pageId || !Array.isArray(ledger.assets) || new Set(ledger.assets.map((entry: any) => entry.key)).size !== ledger.assets.length || required.some(key => !ledger.assets.some((entry: any) => entry.key === key))) return null;
     const imported: ImportedAssetV2[] = [];
@@ -771,6 +772,7 @@ export async function verifyFullReplicaReviewEvidence(review: FullReplicaReview,
   const motionRows = manifest.version === 4 && review.decision === 'approved' && manifest.responsive && visualProgram
     ? await verifyPhoneMotionSource({ taskId: manifest.taskId, sourceUrl: manifest.sourceUrl, plan: manifest.responsive, program: visualProgram, packets: phonePackets, read: readBound }) : [];
   const responsiveDOM = new Map<string, string>();
+  const effectFrontUrls = new Set<string>();
   if (manifest.nativeImagePolicy && review.decision === 'approved') {
     const programFile = await readBound(manifest.body.program), base = validateNative44Program(JSON.parse(programFile.bytes.toString('utf8')));
     const program = manifest.responsive ? prepareResponsiveBody(base, manifest.responsive, '').program : base;
@@ -782,6 +784,7 @@ export async function verifyFullReplicaReviewEvidence(review: FullReplicaReview,
     if (!nativeViewportRasterMapping(metadata,view,row.captureMode)) fail('review_raster_dimensions');
     const raw = await readBound(row.dom, path.dirname(file.filename)), dom = browserDOM.parse(JSON.parse(raw.bytes.toString('utf8'))), url = new URL(dom.url);
     if (dom.pageId !== bound.pageId || dom.viewport.width !== view.width || dom.viewport.height !== view.height || url.origin !== manifest.targetOrigin || url.username || url.password || /(?:token|nonce|password|secret|authorization)=/i.test(url.search) || !Number.isFinite(Date.parse(dom.observedAt)) || Date.parse(dom.observedAt) > Date.parse(review.observedAt) || Date.parse(review.observedAt) - Date.parse(dom.observedAt) > 60 * 60 * 1000) fail('review_dom_identity');
+    effectFrontUrls.add(dom.url);
     if (visualAuditRequired && view.width >= 1024) {
       if (!row.visualAudit) fail('review_visual_audit_missing');
       await verifyFullReplicaVisualReview({ manifest, bound, review, width: view.width, height: view.height, screenshotSha256: view.screenshot.sha256, reference: row.visualAudit, reviewDirectory: path.dirname(file.filename), targetHtml: dom.html, read: readBound });
@@ -845,7 +848,7 @@ export async function verifyFullReplicaReviewEvidence(review: FullReplicaReview,
       const motion = motionRows.find(item => item.width === view.width && item.height === view.height && action.key === `carousel-motion:${item.componentKey}`);
       if (motion) {
         if (action.kind !== 'carousel' || action.selector !== `.elementor-${bound.pageId} .${native44ModuleClass(motion.componentKey)}` || !states[0].screenshot || !states[1].screenshot || !states[0].motion || !states[1].motion) fail('review_carousel_motion_evidence');
-        const differences = compareCarouselMotion(motion.before, motion.after, states[0].motion, states[1].motion);
+        const differences = compareCarouselMotion(motion.before, motion.after, states[0].motion, states[1].motion, motion.effect);
         if (differences.length) fail(`review_carousel_motion_mismatch:${motion.componentKey}:${differences.join(',')}`);
       }
       const navigationForm = manifest.body.navigationForms?.find(form => action.selector === navigationFormSelector(form, manifest.taskId));
@@ -853,6 +856,7 @@ export async function verifyFullReplicaReviewEvidence(review: FullReplicaReview,
     }
     for (const form of manifest.body.navigationForms ?? []) if (!interactions.actions.some((action: any) => action.kind === 'form' && action.selector === navigationFormSelector(form, manifest.taskId) && action.expectedOutcome === 'navigated')) fail('review_navigation_form_interaction_missing');
   }
+  if (manifest.effectTrace && review.decision === 'approved') await verifyEffectReview({ manifest, pageId: bound.pageId, fingerprint: review.fingerprint, observedAt: review.observedAt, evidence: evidence.effectTrace, base: path.dirname(file.filename), frontUrls: effectFrontUrls, read: readBound });
   if (manifest.responsive) await verifyResponsiveReview(evidence.responsive, manifest.responsive, { ...manifest, pageId: bound.pageId, headerId: bound.headerId, fingerprint: review.fingerprint, observedAt: review.observedAt }, readBound, path.dirname(file.filename), responsiveDOM);
   await reader.revalidateAll();
   });

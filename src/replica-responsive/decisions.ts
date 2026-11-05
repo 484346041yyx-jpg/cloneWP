@@ -17,7 +17,7 @@ export const responsiveOwnedHeaderDecisionSchema = z.object({
 }).strict();
 export const responsiveReadonlyHeaderDecisionSchema = z.object({
   mode: z.literal('reuse-readonly'), ...override,
-  headerId: z.string().regex(/^header_[1-9]\d{0,17}$/), sharedHash: z.string().regex(/^[a-f0-9]{64}$/),
+  headerId: z.string().regex(/^(?:header_[1-9]\d{0,17}|default_header)$/), sharedHash: z.string().regex(/^[a-f0-9]{64}$/),
   evidence: z.array(evidenceRef).min(1).max(20),
 }).strict();
 /** Frozen before jobs start. Values are source facts, except explicitly named

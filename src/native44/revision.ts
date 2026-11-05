@@ -53,7 +53,7 @@ const now = () => new Date().toISOString();
 function inside(root: string, filename: string): void { const relative = path.relative(root, filename); if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) fail('path_escape'); }
 function noSecrets(value: unknown): void { const text = JSON.stringify(value); if (redactor()(text) !== text) fail('secret_in_artifact'); }
 async function checkedRoot(input: string) { return realpath(path.resolve(input)); }
-async function readBound(root: string, ref: Native44CurrentRef, max = 32 * 1024 * 1024): Promise<Buffer> {
+async function readBound(root: string, ref: Native44CurrentRef, max = Number.POSITIVE_INFINITY): Promise<Buffer> {
   const reader = activeVerifiedEvidenceReader(root); if (reader) return reader.read(ref, max);
   refSchema.parse(ref); if (/[?\r\n]|^[a-z]+:\/\//i.test(ref.path)) fail('reference_invalid');
   const filename = path.resolve(root, ref.path); inside(root, filename);

@@ -2,6 +2,8 @@
 
 本能力是完整复刻和已授权修订的默认收尾步骤，由任务代理自动执行，不要求用户再提醒或手工对齐。独立实现位于 `src/editor-completion/`，复用现有工作流，不另建技能或建站流程。它确认已保存正文、当前页自动保存和正常重开的编辑器处于同一版本；前台视觉与交互验收继续独立执行。
 
+新复刻交付时，正常重开只证明当前文档可编辑；还须按[完整复刻流程的同宽对照](full-replica-workflow.md)核对最终前台与编辑画布的实际布局。同宽、同断点、同版本和同状态下存在排版差异，或没有实际对照证据时，不标记交付完成。只检查当前新任务页面。
+
 新完整复刻 manifest 和新 native44 journal 冻结 `editorCompletionPolicy:{version:1,mode:"align-and-reopen",runtime:"shared-owned-editor-v1"}`。旧合同不自动补字段；今后准备的授权修订通过当前版本 marker 启用收尾要求，不改旧 program、CSS、journal 或历史完成记录。只读 status/resume 不迁移旧任务，也不触发远程写入。
 
 ## 会话与读取复用边界

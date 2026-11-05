@@ -6,8 +6,8 @@ import type { ObservationPacketV2 } from '../replica-v2/observation.js';
 import type { ResponsivePlan } from './contract.js';
 
 const ref = z.object({ path: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-const frame = z.object({ viewportWidth: z.number().finite().positive(), activeIndex: z.number().int().min(0), items: z.array(z.object({ index: z.number().int().min(0), x: z.number().finite(), width: z.number().finite().positive() }).strict()).min(2).max(40) }).strict();
-const motion = z.object({ version: z.literal(1), kind: z.literal('clonewp-responsive-carousel-motion-source'), taskId: z.string().min(1), sourceUrl: z.url(), rows: z.array(z.object({ componentKey: z.string().min(1), sectionKey: z.string().min(1), snapshotId: z.string().min(1), sourceNodeId: z.string().min(1), width: z.number().int().positive(), height: z.number().int().positive(), clientWidth: z.number().int().positive(), observedAt: z.string().datetime(), before: frame, after: frame, beforeScreenshot: ref, afterScreenshot: ref }).strict()).max(2000) }).strict();
+const frame = z.object({ viewportWidth: z.number().finite().positive(), activeIndex: z.number().int().min(0), items: z.array(z.object({ index: z.number().int().min(0), x: z.number().finite(), width: z.number().finite().positive(), opacity: z.number().finite().min(0).max(1).optional() }).strict()).min(2).max(40) }).strict();
+const motion = z.object({ version: z.literal(1), kind: z.literal('clonewp-responsive-carousel-motion-source'), taskId: z.string().min(1), sourceUrl: z.url(), rows: z.array(z.object({ componentKey: z.string().min(1), sectionKey: z.string().min(1), snapshotId: z.string().min(1), sourceNodeId: z.string().min(1), width: z.number().int().positive(), height: z.number().int().positive(), clientWidth: z.number().int().positive(), observedAt: z.string().datetime(), effect: z.literal('fade').optional(), before: frame, after: frame, beforeScreenshot: ref, afterScreenshot: ref }).strict()).max(2000) }).strict();
 export const carouselMotionFrameSchema = frame;
 export type CarouselMotionFrame = z.infer<typeof frame>;
 type Ref = z.infer<typeof ref>;
@@ -43,6 +43,17 @@ export function requiredPhoneCarousels(program: Native44Program, plan: Responsiv
   return [...entries.values()];
 }
 
+/** Settled fade evidence: the opaque slide changes without moving the track. */
+export function hasSettledCarouselFade(before: CarouselMotionFrame, after: CarouselMotionFrame): boolean {
+  if (before.activeIndex === after.activeIndex || before.items.length !== after.items.length) return false;
+  const paintsActiveOnly = (value: CarouselMotionFrame) => value.items.some(item => item.index === value.activeIndex) &&
+    value.items.every(item => item.opacity !== undefined && (item.index === value.activeIndex ? item.opacity >= 0.95 : item.opacity <= 0.05));
+  return paintsActiveOnly(before) && paintsActiveOnly(after) && before.items.every(item => {
+    const next = after.items.find(other => other.index === item.index);
+    return !!next && Math.abs(item.x - next.x) <= 2 && Math.abs(item.width - next.width) <= 2;
+  });
+}
+
 export async function verifyPhoneMotionSource(input: { taskId: string; sourceUrl: string; plan: ResponsivePlan; program: Native44Program; packets: ObservationPacketV2[]; read: Read }): Promise<z.infer<typeof motion>['rows']> {
   const { taskId, sourceUrl, plan, program, packets, read } = input, required = requiredPhoneCarousels(program, plan);
   if (!required.length) {
@@ -68,7 +79,7 @@ export async function verifyPhoneMotionSource(input: { taskId: string; sourceUrl
       const after = row.after.items.find(other => other.index === item.index);
       return after && Math.abs(after.x - item.x) > 2;
     });
-    if (row.before.activeIndex === row.after.activeIndex || !moved || row.before.viewportWidth < 1 || row.after.viewportWidth < 1 || row.before.items.some(item => row.before.items.filter(other => other.index === item.index).length !== 1) || row.after.items.some(item => row.after.items.filter(other => other.index === item.index).length !== 1)) fail('source_motion_geometry');
+    if (row.before.activeIndex === row.after.activeIndex || !(row.effect === 'fade' ? hasSettledCarouselFade(row.before, row.after) : moved) || row.before.viewportWidth < 1 || row.after.viewportWidth < 1 || row.before.items.some(item => row.before.items.filter(other => other.index === item.index).length !== 1) || row.after.items.some(item => row.after.items.filter(other => other.index === item.index).length !== 1)) fail('source_motion_geometry');
     for (const shot of [row.beforeScreenshot, row.afterScreenshot]) {
       const image = await read(shot, path.dirname(file.filename)), metadata = await sharp(image.bytes).metadata();
       if (!metadata.width || !metadata.height || metadata.width < row.clientWidth || metadata.width > row.clientWidth * 4 || metadata.height < row.height || metadata.height > row.height * 4) fail('source_motion_screenshot');
@@ -78,8 +89,9 @@ export async function verifyPhoneMotionSource(input: { taskId: string; sourceUrl
   return source.rows;
 }
 
-export function compareCarouselMotion(sourceBefore: CarouselMotionFrame, sourceAfter: CarouselMotionFrame, targetBefore: CarouselMotionFrame, targetAfter: CarouselMotionFrame): string[] {
+export function compareCarouselMotion(sourceBefore: CarouselMotionFrame, sourceAfter: CarouselMotionFrame, targetBefore: CarouselMotionFrame, targetAfter: CarouselMotionFrame, effect?: 'fade'): string[] {
   const errors: string[] = [];
+  if (effect === 'fade' && !hasSettledCarouselFade(targetBefore, targetAfter)) errors.push('fade opacity transfer');
   if (targetAfter.activeIndex - targetBefore.activeIndex !== sourceAfter.activeIndex - sourceBefore.activeIndex) errors.push('slide step');
   for (const [label, source, target] of [['before', sourceBefore, targetBefore], ['after', sourceAfter, targetAfter]] as const) {
     if (Math.abs(source.viewportWidth - target.viewportWidth) > 4) errors.push(`${label} viewport width`);

@@ -14,6 +14,16 @@ export function replicaInstructionScope(command:string):'body-only'|'header-only
 /** Opt-in only: absent on frozen tasks, whose page shell stays unchanged. */
 export const pageScopeSchema = z.literal('body-only');
 const unit = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,239}$/);
+export const reservedDraftSchema = z.object({
+  pageId: z.number().int().positive(), operationId: z.uuid(),
+  evidence: z.object({ path: z.string().min(1).max(4096), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+}).strict();
+export type ReservedReplicaDraft = z.infer<typeof reservedDraftSchema>;
+export function assertReservedDraftEvidence(reservation: ReservedReplicaDraft, evidence: unknown, input: { targetOrigin: string; runId: string; slug: string; title: string }) {
+  const row = evidence as { kind?: string; runId?: string; targetOrigin?: string; operationId?: string; snapshotSha256?: string; verifiedAt?: string; page?: Record<string, unknown> } | null;
+  const page = row?.page;
+  if (row?.kind !== 'clonewp-draft-reservation-readback' || row.runId !== input.runId || row.targetOrigin !== input.targetOrigin || row.operationId !== reservation.operationId || !/^[a-f0-9]{64}$/.test(row.snapshotSha256 ?? '') || !Number.isFinite(Date.parse(row.verifiedAt ?? '')) || !page || page.id !== reservation.pageId || page.status !== 'draft' || page.owned !== true || page.slug !== input.slug || page.title !== input.title || page.template !== 'elementor_header_footer' || page.elementor !== true || page.elementCount !== 0) throw Error('replica_page_scope_reserved_draft_evidence');
+}
 export const bodySelectionSchema = z.object({
   version: z.literal(1),
   userInstruction: z.string().trim().min(10).max(4096),
@@ -25,7 +35,7 @@ export const sourcePartitionSchema = z.object({
   headerUnits: z.array(unit).min(1).max(10_000),
   bodyUnits: z.array(unit).min(1).max(10_000),
   footerUnits: z.array(unit).max(10_000).optional(),
-  unselectedBodyUnits: z.array(unit).min(1).max(10_000).optional(),
+  unselectedBodyUnits: z.array(unit).max(10_000).optional(),
   selection: bodySelectionSchema.optional(),
 }).strict();
 
@@ -54,12 +64,17 @@ export function assertBodySelectionUnits(partition: z.infer<typeof sourcePartiti
 
 export function assertPageScope(input: {
   pageScope?: 'body-only'; version: number; headerProvider?: string;
-  reusedHeader?: unknown; sourcePartition: z.infer<typeof sourcePartitionSchema>;
+  deliveryPolicy?: 'publish-after-review' | 'draft-for-user-review'; sourceUrl?: string; slug?: string; reviewSkipPolicy?: unknown;
+  reusedHeader?: unknown; reservedDraft?: ReservedReplicaDraft; currentRecord?: unknown; sourcePartition: z.infer<typeof sourcePartitionSchema>;
 }, version: 4 | 8): void {
   const p = input.sourcePartition, footer = p.footerUnits ?? [], unselected = p.unselectedBodyUnits ?? [];
+  const draft = input.deliveryPolicy === 'draft-for-user-review';
+  if (draft && (input.version !== version || input.pageScope !== 'body-only' || input.reviewSkipPolicy)) throw Error('replica_page_scope_draft_contract');
+  if (input.reservedDraft && (!draft || input.currentRecord)) throw Error('replica_page_scope_reserved_draft_contract');
   if (p.selection || p.unselectedBodyUnits) {
     if (!p.selection || !p.unselectedBodyUnits || input.pageScope !== 'body-only' || input.version !== version) throw Error('replica_page_scope_selection_contract');
     bodySelectionSchema.parse(p.selection);
+    if (!unselected.length && (!draft || !p.selection.targetSlug || p.selection.targetSlug !== input.slug || !input.sourceUrl || new URL(input.sourceUrl).pathname !== '/')) throw Error('replica_page_scope_full_homepage_draft_required');
   }
   if (input.pageScope === undefined && p.footerUnits === undefined) return;
   if (input.pageScope !== undefined && (input.version !== version || !input.reusedHeader ||

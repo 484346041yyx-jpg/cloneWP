@@ -60,7 +60,7 @@ export class VerifiedEvidenceReader {
   }
   /** Hash-bound validation without retaining or copying pixels/large packets.
    * The dependency ledger is separate from the bounded byte cache. */
-  async verify(ref: VerifiedEvidenceRef, max = 32 * 1024 * 1024): Promise<{ bytes: number }> {
+  async verify(ref: VerifiedEvidenceRef, max = Number.POSITIVE_INFINITY): Promise<{ bytes: number }> {
     const filename = this.filename(ref), key = `${filename}\0${ref.sha256}`, previous = this.dependencies.get(key);
     if (previous) {
       if (previous.bytes > max) throw Error('verified_evidence_artifact_too_large');
@@ -68,7 +68,7 @@ export class VerifiedEvidenceReader {
     }
     return { bytes: (await this.load(ref, max, false)).length };
   }
-  async read(ref: VerifiedEvidenceRef, max = 32 * 1024 * 1024): Promise<Buffer> {
+  async read(ref: VerifiedEvidenceRef, max = Number.POSITIVE_INFINITY): Promise<Buffer> {
     const filename = this.filename(ref), key = `${filename}\0${ref.sha256}`, cached = this.cache.get(key);
     if (cached) {
       if (cached.bytes.length > max) throw Error('verified_evidence_artifact_too_large');

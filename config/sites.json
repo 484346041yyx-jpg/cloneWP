@@ -11,6 +11,11 @@
       "configFile": "config/sites/jiangubottle.json",
       "targetOrigin": "https://jiangubottle.com",
       "role": "production"
+    },
+    "jp-vapes": {
+      "configFile": "config/sites/jp-vapes.json",
+      "targetOrigin": "https://jp-vapes.com",
+      "role": "production"
     }
   }
 }

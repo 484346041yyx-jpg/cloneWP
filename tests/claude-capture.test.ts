@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { BrowserContext } from 'playwright';
 import { geometryHashFromRows, observeWithClaudeBrowser } from '../src/claude-capture/observe.js';
 import { observePhonesWithClaudeBrowser } from '../src/claude-capture/phones.js';
+import { openClaudeBrowser } from '../src/claude-capture/session.js';
 import { native44ObservedGeometryHash, readNative44BrowserObservation } from '../src/native44/source.js';
 import { validateObservationPacketV2, type ObservationPacketV2 } from '../src/replica-v2/observation.js';
 
@@ -24,6 +25,25 @@ a.card{display:inline-block;padding:12px 20px;background:#06c;color:#fff;text-de
 <section id="two"><h2>Fixture two</h2><p>More visible copy that must stay in the capture.</p></section><footer id="bottom">Footer text</footer>
 ${scrollHeader ? `<script>const bar=document.getElementById('top'),wrap=document.getElementById('wrap');wrap.style.height='80px';addEventListener('scroll',()=>{bar.classList.toggle('fixed',scrollY>40);wrap.style.height=scrollY>40?'0px':'80px'});</script>` : ''}</body></html>`;
 const routes = (scroll: boolean) => async (context: BrowserContext) => { await context.route('https://8.8.8.8/**', route => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: page(scroll) })); };
+
+test('a stalled image decode returns a failed observation even when page timers are paused', async () => {
+  const session = await openClaudeBrowser({ viewport: { width: 800, height: 600 }, routes: routes(false) });
+  try {
+    await session.page.clock.install();
+    await session.page.goto(url);
+    await session.page.clock.pauseAt(await session.page.evaluate(() => Date.now()) + 500);
+    const result = await Promise.race([session.page.evaluate<{ media: Array<{ decoded: boolean; drawable: boolean }> }>(`(async () => {
+      const image = document.createElement('img');
+      image.id = 'stalled-decode'; image.width = 50; image.height = 50;
+      image.decode = () => new Promise(() => {});
+      document.body.append(image);
+      return JSON.parse(await collectSourceRenderEvidenceV2({ taskId: 'fixture', snapshotId: 'test', screenshotHash: '${'a'.repeat(64)}', nodes: [{ id: 'image', selector: '#stalled-decode' }] }));
+    })()`), new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(Error('render probe exceeded its wall time')), 12_000); timer.unref(); })]);
+    assert.equal(result.media.length, 1);
+    assert.equal(result.media[0].decoded, false);
+    assert.equal(result.media[0].drawable, false);
+  } finally { await session.close(); }
+});
 
 test('live geometry rows hash with exactly the observed-packet formula', () => {
   const rect = { x: 0, y: 0, width: 100, height: 20 }, base = { id: 'n', parentId: null, regionId: 'r', tag: 'div', selector: '#n', attributes: {}, childIds: [], styleId: 's', layoutId: 'l', visible: true };

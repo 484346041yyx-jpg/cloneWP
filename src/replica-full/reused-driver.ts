@@ -24,7 +24,9 @@ function unwrap(value: unknown): any {
   return result.value;
 }
 export async function reusedBodyDriverCode(identity: { targetOrigin: string; headerId: string; mobileMaxWidth: number; pageScope?: 'body-only' }, data: Record<string, unknown>): Promise<string> {
-  const origin = new URL(identity.targetOrigin); if (origin.origin !== identity.targetOrigin || !/^header_[1-9]\d{0,17}$/.test(identity.headerId) || !Number.isInteger(identity.mobileMaxWidth) || identity.mobileMaxWidth < 320 || identity.mobileMaxWidth > 1024) throw Error('replica_full_reuse_identity');
+  const origin = new URL(identity.targetOrigin);
+  const validHeader = /^header_[1-9]\d{0,17}$/.test(identity.headerId) || identity.headerId === 'default_header' && identity.pageScope === 'body-only';
+  if (origin.origin !== identity.targetOrigin || !validHeader || !Number.isInteger(identity.mobileMaxWidth) || identity.mobileMaxWidth < 320 || identity.mobileMaxWidth > 1024) throw Error('replica_full_reuse_identity');
   const input = Buffer.from(JSON.stringify({ ...identity, ...data })).toString('base64');
   const code=`$input=json_decode(base64_decode('${input}'),true);\n${await readFile(new URL('./reused-driver.php', import.meta.url), 'utf8')}`;return data.currentRecord?nativeProductRequestPHP((data.currentRecord as {productId:number}).productId,code):code;
 }
@@ -41,11 +43,13 @@ export class WordPressReusedBodyDriver {
     const contractHash = this.manifest.taskId === 'huaqi-product-layout-jiangubottle-20261028' && this.manifest.reviewSkipPolicy
       ? fullReplicaHash((({ reviewSkipPolicy: _authorization, ...frozen }) => frozen)(this.manifest))
       : fullReplicaHash(this.manifest);
-    return reusedBodyDriverCode({ targetOrigin: this.manifest.targetOrigin, headerId: this.manifest.reusedHeader!.headerId, mobileMaxWidth: this.manifest.reusedHeader!.mobileMaxWidth, ...(this.manifest.pageScope ? { pageScope: this.manifest.pageScope } : {}) }, { ...(this.manifest.currentRecord?{currentRecord:this.manifest.currentRecord}:{}), runId: this.manifest.runId, contractHash, ...(this.manifest.reviewSkipPolicy ? { publicationAuthorizationHash: fullReplicaHash(this.manifest.reviewSkipPolicy) } : {}), ...data });
+    const reserved = this.manifest.reservedDraft;
+    return reusedBodyDriverCode({ targetOrigin: this.manifest.targetOrigin, headerId: this.manifest.reusedHeader!.headerId, mobileMaxWidth: this.manifest.reusedHeader!.mobileMaxWidth, ...(this.manifest.pageScope ? { pageScope: this.manifest.pageScope } : {}) }, { ...(this.manifest.currentRecord?{currentRecord:this.manifest.currentRecord}:{}), runId: this.manifest.runId, contractHash, ...(reserved ? { reservedDraft: { pageId: reserved.pageId, operationId: reserved.operationId, slug: this.manifest.slug, title: this.manifest.title } } : {}), ...(this.manifest.reviewSkipPolicy ? { publicationAuthorizationHash: fullReplicaHash(this.manifest.reviewSkipPolicy) } : {}), ...data });
   }
   private snapshot(value: ReusedBodySnapshot): ReusedBodySnapshot {
     if (!value || !hash.test(value.hash) || fullReplicaHash(reusedHeaderResourceSchema.parse(value.resources)) !== fullReplicaHash(this.manifest.reusedHeader) || !value.receipts || typeof value.receipts !== 'object') throw Error('replica_full_reuse_resources_changed');
     const page = value.page;
+    if (this.manifest.reservedDraft && page?.pageId !== this.manifest.reservedDraft.pageId) throw Error('replica_full_reuse_reserved_draft_missing');
     if (page && (!Number.isSafeInteger(page.pageId) || page.pageId < 1 || page.runId !== this.manifest.runId || !['draft', 'publish'].includes(page.status) || !Array.isArray(page.elements) || !hash.test(page.bodyHash) || !hash.test(page.documentHash) || !hash.test(page.metaHash) || page.headerId !== null && page.headerId !== this.manifest.reusedHeader!.headerId)) throw Error('replica_full_reuse_page_boundary');
     if (page && (page.template !== 'elementor_header_footer' || !page.flags || Object.keys(page.flags).sort().join(',') !== '_woodmart_copyrights_off,_woodmart_footer_off,_woodmart_main_layout,_woodmart_prefooter_off,_woodmart_title_off' || ['_woodmart_title_off', '_woodmart_prefooter_off', '_woodmart_footer_off', '_woodmart_copyrights_off'].some(key => page.flags[key] !== (this.manifest.pageScope === 'body-only' && key !== '_woodmart_title_off' ? '' : '1')) || page.flags._woodmart_main_layout !== 'full-width')) throw Error('replica_full_reuse_page_shell');
     return value;
@@ -75,6 +79,7 @@ export class WordPressReusedBodyDriver {
     return result;
   }
   async mutate(action: ReusedBodyAction, before: ReusedBodySnapshot, operationId: string, payload: Record<string, unknown>, intent: HeaderPHPWriteIntent) {
+    if (action === 'publish' && this.manifest.deliveryPolicy === 'draft-for-user-review') throw Error('replica_full_draft_publication_forbidden');
     this.snapshot(before);
     if (Object.values(before.receipts).some(receipt => !receipt || receipt.state !== 'complete')) throw Error('replica_full_reuse_reconcile_required');
     if (!['create-page', 'style', 'bind', 'publish'].includes(action) || !/^[A-Za-z0-9_-]{4,100}$/.test(operationId) || intent.operationId !== operationId || intent.runId !== this.manifest.runId || intent.expectedSnapshotSha256 !== before.hash || intent.resource !== `full-replica-reuse/${this.manifest.runId}` || !hash.test(intent.persistedIntentSha256)) throw Error('replica_full_reuse_intent');
